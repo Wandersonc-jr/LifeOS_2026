@@ -1,0 +1,20 @@
+Plaintext
+# 1. Ignore the Virtual Environment (Too big)
+.venv/
+env/
+venv/
+
+# 2. Ignore Python Trash (Temporary files)
+_pycache_/
+*.pyc
+
+# 3. Ignore Secrets (CRITICAL SECURITY)
+.env
+config.py
+secrets.json
+*.key
+
+# 4. Ignore Data (Keep big data local)
+*.csv
+*.xlsx
+*.ds_store
