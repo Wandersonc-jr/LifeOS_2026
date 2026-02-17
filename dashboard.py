@@ -8,6 +8,7 @@ from datetime import date as dt_class
 # --- CONFIGURATION ---
 st.set_page_config(page_title="My Financial Core", page_icon="💰", layout="wide")
 FINANCE_FILE = "finance.csv"
+INCOME_FILE = "incomes.csv"  # <--- NEW DATABASE
 CARDS_FILE = "cards.csv"
 
 
@@ -61,64 +62,85 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", [
     "📊 Dashboard",
     "💸 Expenses (Entry)",
-    "💳 Manage Cards",
-    "💰 Incomes (Coming Soon)"
+    "💰 Incomes (Entry)",
+    "💳 Manage Cards"
 ])
 
 # ==============================================================================
-# PAGE 1: DASHBOARD (Read-Only Analytics)
+# PAGE 1: DASHBOARD (THE CFO VIEW)
 # ==============================================================================
 if page == "📊 Dashboard":
     st.title("📊 Executive Dashboard")
-    st.markdown("### Overview of your Financial Health")
 
-    if os.path.exists(FINANCE_FILE):
-        df = pd.read_csv(FINANCE_FILE)
-        df["Date"] = pd.to_datetime(df["Date"])
+    # 1. LOAD DATA
+    df_expenses = load_data(FINANCE_FILE, ["Date", "Price"])
+    df_income = load_data(INCOME_FILE, ["Date", "Price"])
 
-        # 1. BIG METRICS
+    if not df_expenses.empty:
+        df_expenses["Date"] = pd.to_datetime(df_expenses["Date"])
+        # Fix: Only convert to datetime if data exists
+        if not df_income.empty:
+            df_income["Date"] = pd.to_datetime(df_income["Date"])
+
+        # 2. DATE FILTER (THIS MONTH)
         current_month = dt_class.today().strftime("%Y-%m")
-        df["Month"] = df["Date"].dt.to_period("M").astype(str)
 
-        # Calculate spending specifically for THIS month
-        this_month_expenses = df[df["Month"] == current_month]["Price"].sum()
-        total_all_time = df["Price"].sum()
+        # Filter Expenses
+        df_expenses["Month"] = df_expenses["Date"].dt.to_period("M").astype(str)
+        total_expenses = df_expenses[df_expenses["Month"] == current_month]["Price"].sum()
 
+        # Filter Income (Handle empty income file safely)
+        total_income = 0.0
+        if not df_income.empty:
+            df_income["Month"] = df_income["Date"].dt.to_period("M").astype(str)
+            total_income = df_income[df_income["Month"] == current_month]["Price"].sum()
+
+        # 3. CALCULATE SAVINGS
+        savings = total_income - total_expenses
+
+        # 4. DISPLAY METRICS (KPIs)
         col1, col2, col3 = st.columns(3)
-        col1.metric("Spent This Month", f"R$ {this_month_expenses:,.2f}")
-        col2.metric("Total All Time", f"R$ {total_all_time:,.2f}")
-        col3.metric("Active Cards", len(load_data(CARDS_FILE, ["Card Name"])))
+        col1.metric("💰 Income (This Month)", f"R$ {total_income:,.2f}")
+        col2.metric("💸 Expenses (This Month)", f"R$ {total_expenses:,.2f}", delta_color="inverse")
+        col3.metric("🐷 Net Savings", f"R$ {savings:,.2f}", delta=f"{savings:,.2f}")
 
         st.divider()
 
-        # 2. CHARTS (Side by Side)
+        # 5. CHARTS
         c1, c2 = st.columns(2)
-
         with c1:
-            st.subheader("📅 Monthly Cash Flow")
-            # Group by Month for the Bar Chart
-            monthly_data = df.groupby("Month")["Price"].sum().reset_index()
-            fig_bar = px.bar(monthly_data, x="Month", y="Price", text_auto='.2s', title="Future Commitments")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.subheader("Monthly Cash Flow")
+            # Group Expenses
+            exp_monthly = df_expenses.groupby("Month")["Price"].sum().reset_index()
+            exp_monthly["Type"] = "Expense"
+
+            # Group Income
+            if not df_income.empty:
+                inc_monthly = df_income.groupby("Month")["Price"].sum().reset_index()
+                inc_monthly["Type"] = "Income"
+                # Combine both for a clustered bar chart
+                combined_df = pd.concat([exp_monthly, inc_monthly])
+                fig_bar = px.bar(combined_df, x="Month", y="Price", color="Type", barmode="group",
+                                 title="Income vs Expenses")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.info("Add Income to see the comparison chart.")
 
         with c2:
-            st.subheader("🍕 Category Breakdown")
-            # Pie Chart for Categories
-            category_data = df.groupby("Category")["Price"].sum().reset_index()
-            fig_pie = px.pie(category_data, values="Price", names="Category", title="Where is money going?")
+            st.subheader("Expense Breakdown")
+            cat_data = df_expenses.groupby("Category")["Price"].sum().reset_index()
+            fig_pie = px.pie(cat_data, values="Price", names="Category", hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
 
     else:
-        st.info("No data available yet. Go to 'Expenses' to add your first transaction.")
+        st.info("No data yet. Go to 'Expenses' or 'Incomes' to start.")
 
 # ==============================================================================
-# PAGE 2: EXPENSES (Entry & Management)
+# PAGE 2: EXPENSES
 # ==============================================================================
 elif page == "💸 Expenses (Entry)":
     st.title("💸 Expenses Management")
-
-    # --- SECTION A: NEW ENTRY FORM ---
-    st.markdown("### 📝 Add New Expense")
+    # ... (Same as before) ...
     df_cards = load_data(CARDS_FILE, ["Card Name"])
     payment_options = ["Pix", "Cash"] + df_cards["Card Name"].tolist()
 
@@ -131,7 +153,7 @@ elif page == "💸 Expenses (Entry)":
         method = c3.selectbox("Payment", payment_options)
         installments = c4.number_input("Installments", 1, 24, 1)
 
-        if st.form_submit_button("💾 Save Expense"):
+        if st.form_submit_button("Save Expense"):
             if price > 0 and item:
                 new_df = generate_installments(date, item, price, category, method, installments)
                 if os.path.exists(FINANCE_FILE):
@@ -142,47 +164,58 @@ elif page == "💸 Expenses (Entry)":
                 st.rerun()
 
     st.divider()
-
-    # --- SECTION B: HISTORY & FILTER ---
-    st.markdown("### 🔍 Transaction History")
-
     if os.path.exists(FINANCE_FILE):
         df = pd.read_csv(FINANCE_FILE)
         df["Date"] = pd.to_datetime(df["Date"])
-
-        # Filters in an Expander to keep it clean
-        with st.expander("Filter Options", expanded=True):
-            col_f1, col_f2 = st.columns(2)
-            start_date = col_f1.date_input("Start Date", dt_class.today() - relativedelta(months=1))
-            end_date = col_f2.date_input("End Date", dt_class.today() + relativedelta(months=6))
-
-            cats = ["All"] + df["Category"].unique().tolist()
-            sel_cat = st.selectbox("Filter Category", cats)
-
-        # Apply Logic
-        mask = (df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)
-        filtered_df = df.loc[mask]
-
-        if sel_cat != "All":
-            filtered_df = filtered_df[filtered_df["Category"] == sel_cat]
-
-        filtered_df = filtered_df.sort_values(by="Date", ascending=False)
-
-        # Editable Table
-        edited_df = st.data_editor(filtered_df, use_container_width=True, num_rows="dynamic", key="history")
-
-        if st.button("Update Database with Changes"):
-            # Note: A real app needs complex logic to update specific rows.
-            # For now, we block this on filters for safety, or we'd overwrite the whole DB with just the filtered view.
-            if sel_cat != "All" or start_date > (dt_class.today() - relativedelta(years=5)):
-                st.warning(
-                    "⚠️ Safety Lock: You can only save edits when viewing ALL data (no filters). This prevents data loss.")
-            else:
-                edited_df.to_csv(FINANCE_FILE, index=False)
-                st.success("Updated!")
+        df = df.sort_values(by="Date", ascending=False)
+        st.data_editor(df, use_container_width=True, num_rows="dynamic", key="exp_history")
+        if st.button("Update Expenses"):
+            df.to_csv(FINANCE_FILE, index=False)  # Simplified save for now
 
 # ==============================================================================
-# PAGE 3: MANAGE CARDS
+# PAGE 3: INCOMES (NEW!)
+# ==============================================================================
+elif page == "💰 Incomes (Entry)":
+    st.title("💰 Income Management")
+    st.markdown("### 💵 Add New Income")
+
+    with st.form("income_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        date = c1.date_input("Date Received")
+        category = c2.selectbox("Category", ["Salary", "Freelance", "Dividends", "Gift", "Other"])
+        price = c3.number_input("Amount (R$)", step=0.01)
+        item = st.text_input("Description (e.g. Salary February)")
+
+        if st.form_submit_button("Save Income"):
+            if price > 0:
+                new_data = pd.DataFrame({
+                    "Date": [date],
+                    "Category": [category],
+                    "Item": [item],
+                    "Price": [price]
+                })
+                if os.path.exists(INCOME_FILE):
+                    new_data.to_csv(INCOME_FILE, mode='a', header=False, index=False)
+                else:
+                    new_data.to_csv(INCOME_FILE, index=False)
+                st.success("Income Saved!")
+                st.rerun()
+
+    st.divider()
+    st.markdown("### 📜 Income History")
+    if os.path.exists(INCOME_FILE):
+        df = pd.read_csv(INCOME_FILE)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values(by="Date", ascending=False)
+
+        edited_income = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="inc_history")
+        if st.button("Update Income DB"):
+            edited_income.to_csv(INCOME_FILE, index=False)
+            st.success("Updated!")
+            st.rerun()
+
+# ==============================================================================
+# PAGE 4: MANAGE CARDS
 # ==============================================================================
 elif page == "💳 Manage Cards":
     st.title("💳 Manage Cards")
@@ -198,15 +231,7 @@ elif page == "💳 Manage Cards":
                 save_data(pd.concat([df_cards, new_card], ignore_index=True), CARDS_FILE)
                 st.success("Card Added!")
                 st.rerun()
-
     st.divider()
     df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
     if not df_cards.empty:
         st.data_editor(df_cards, num_rows="dynamic")
-
-# ==============================================================================
-# PAGE 4: INCOMES (Placeholder)
-# ==============================================================================
-elif page == "💰 Incomes (Coming Soon)":
-    st.title("💰 Income Management")
-    st.info("🚧 Under Construction: This is where you will add Salaries, Dividends, and Freelance work.")
