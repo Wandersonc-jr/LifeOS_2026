@@ -80,11 +80,11 @@ def generate_installments(date, item, price, category, payment_method, installme
 
 
 # --- SIDEBAR NAVIGATION ---
-st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", [
     "📊 Dashboard",
     "💸 Expenses (Entry)",
     "💰 Incomes (Entry)",
+    "🎯 Set Budgets", # <--- Add this
     "💳 Manage Cards"
 ])
 
@@ -121,7 +121,7 @@ if page == "📊 Dashboard":
 
         savings = total_income - total_expenses
 
-        # Display Metrics
+        # Display Metrics (Top Row)
         c1, c2, c3 = st.columns(3)
         c1.metric("💰 Income", f"R$ {total_income:,.2f}")
         c2.metric("💸 Expenses", f"R$ {total_expenses:,.2f}", delta_color="inverse")
@@ -129,7 +129,7 @@ if page == "📊 Dashboard":
 
         st.divider()
 
-        # Charts Section
+        # --- TOP CHARTS (Two Columns) ---
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
             st.subheader("Cash Flow")
@@ -154,68 +154,91 @@ if page == "📊 Dashboard":
                 fig = px.pie(cat_sum, values="Price", names="Category", hole=0.4)
                 st.plotly_chart(fig, use_container_width=True)
 
-        # --- DEEP INSIGHTS (Now correctly inside the IF block) ---
+        # --- BUDGET TRACKER (Full Width - Outside the columns!) ---
         st.divider()
-        st.subheader("🕵️‍♂️ Deep Insights (SQL Queries)")
+        st.subheader("🎯 Monthly Budget Tracker")
 
-        query = """
-                SELECT Category, 
-                       SUM(Price) as Total, 
-                       COUNT(*) as Transactions, 
-                       ROUND(AVG(Price), 2) as Average
-                FROM expenses
-                GROUP BY Category
-                ORDER BY Total DESC
-                """
+        budget_settings = load_data("budgets")
+
+        conn_budget = get_connection()
+        spent_df = pd.read_sql("""
+                                 SELECT Category, SUM(Price) as Spent
+                                 FROM expenses
+                                 WHERE strftime('%Y-%m', Date) = strftime('%Y-%m', 'now')
+                                 GROUP BY Category
+                                  """, conn_budget)
+        conn_budget.close()
+
+        if not budget_settings.empty:
+             for _, row in budget_settings.iterrows():
+                cat = str(row['category']).strip()
+                limit = row['amount']
+
+                spent_row = spent_df[spent_df['Category'] == cat]
+                spent = float(spent_row['Spent'].iloc[0]) if not spent_row.empty else 0.0
+
+                if limit > 0:
+                    col_text, col_bar = st.columns([1, 2])
+                    with col_text:
+                        st.markdown(f"**{cat}**")
+                        st.caption(f"R$ {spent:,.2f} / R$ {limit:,.2f}")
+                    with col_bar:
+                        percent = min(spent / limit, 1.0)
+                        st.progress(percent)
+                        if spent > limit:
+                            st.caption(f"⚠️ Over by R$ {spent - limit:,.2f}")
+        else:
+            st.warning("No budgets found. Go to 'Set Budgets' to configure them.")
+
+        # --- DEEP INSIGHTS (Full Width) ---
+        st.divider()
+        st.subheader("🕵️‍♂️ Deep Insights")
 
         conn = get_connection()
+
+        # 1. Categories Query
+        query = """
+                   SELECT Category,
+                         'R$ ' || printf('%.2f', SUM(Price)) as Total,
+                        COUNT(*)                            as Transactions,
+                        'R$ ' || printf('%.2f', AVG(Price)) as Average
+                   FROM expenses
+                   GROUP BY Category
+                  ORDER BY SUM(Price) DESC
+                  """
         stats_df = pd.read_sql(query, conn)
         st.table(stats_df)
 
+        # 2. Weekday Query
         st.subheader("📅 Spending by Day of Week")
         weekday_query = """
                         SELECT CASE CAST(strftime('%w', Date) AS INT)
-                                   WHEN 0 THEN 'Sunday'
-                                   WHEN 1 THEN 'Monday'
-                                   WHEN 2 THEN 'Tuesday'
-                                   WHEN 3 THEN 'Wednesday'
-                                   WHEN 4 THEN 'Thursday'
-                                   WHEN 5 THEN 'Friday'
-                                   WHEN 6 THEN 'Saturday'
-                                   END as Weekday,
+                                      WHEN 0 THEN 'Sunday'
+                                      WHEN 1 THEN 'Monday'
+                                      WHEN 2 THEN 'Tuesday'
+                                      WHEN 3 THEN 'Wednesday'
+                                      WHEN 4 THEN 'Thursday'
+                                      WHEN 5 THEN 'Friday'
+                                      WHEN 6 THEN 'Saturday'
+                                   END    as Weekday,
                                SUM(Price) as Total
-                        FROM expenses
-                        GROUP BY Weekday
-                        ORDER BY SUM(Price) DESC
-                        """
+                           FROM expenses
+                          GROUP BY Weekday
+                          ORDER BY Total DESC
+                          """
         weekday_df = pd.read_sql(weekday_query, conn)
-        conn.close()
+        st.plotly_chart(px.bar(weekday_df, x='Weekday', y='Total'), use_container_width=True)
 
-        fig_weekday = px.bar(weekday_df, x='Weekday', y='Total', title="Weekly Spending Analysis")
-        st.plotly_chart(fig_weekday, use_container_width=True)
-
-        st.subheader("🐋 The Biggest 'Whale' Purchase")
-
-        # The Query: Select everything, sort by Price (biggest first), and take only 1.
-        whale_query = """
-                      SELECT Date, Item, Category, Price
-                      FROM expenses
-                      ORDER BY Price DESC
-                          LIMIT 1 \
-                      """
-
-        conn = get_connection()
+        # 3. Whale Query
+        whale_query = "SELECT Date, Item, Category, Price FROM expenses ORDER BY Price DESC LIMIT 1"
         whale_df = pd.read_sql(whale_query, conn)
-        conn.close()
 
         if not whale_df.empty:
-            # We use a highlight box for the biggest expense
-            whale_item = whale_df.iloc[0]['Item']
-            whale_price = whale_df.iloc[0]['Price']
-            st.warning(f"Your biggest single purchase was **{whale_item}** for **R$ {whale_price:,.2f}**.")
+            st.warning(f"Your biggest single purchase: **{whale_df.iloc[0]['Item']}** (R$ {whale_df.iloc[0]['Price']:,.2f})")
+
+        conn.close()
 
     else:
-        # If no data exists at all
         st.info("Database is empty. Add data!")
 
 
@@ -325,6 +348,30 @@ elif page == "💰 Incomes (Entry)":
         df = df.sort_values(by="Date", ascending=False)
         st.dataframe(df, use_container_width=True)
 
+elif page == "🎯 Set Budgets":
+    st.title("🎯 Monthly Budget Settings")
+
+    categories = ["Food", "Transport", "Housing", "Fun", "Investments"]
+
+    # Load current budgets from DB
+    current_budgets = load_data("budgets")
+
+    with st.form("budget_form"):
+        new_budgets = {}
+        for cat in categories:
+            # Look up existing value or default to 0.0
+            existing_val = current_budgets[current_budgets['category'] == cat]['amount'].values
+            default_val = float(existing_val[0]) if len(existing_val) > 0 else 0.0
+
+            new_budgets[cat] = st.number_input(f"Limit for {cat}", min_value=0.0, value=default_val, step=50.0)
+
+        if st.form_submit_button("Update All Budgets"):
+            for cat, amount in new_budgets.items():
+                # SQL "REPLACE" or "INSERT OR REPLACE" is great for settings
+                run_query("INSERT OR REPLACE INTO budgets (category, amount) VALUES (?, ?)", (cat, amount))
+            st.success("Budgets updated!")
+            st.rerun()
+
 # ==============================================================================
 # PAGE 4: CARDS (SQL INSERT)
 # ==============================================================================
@@ -352,3 +399,4 @@ elif page == "💳 Manage Cards":
     st.divider()
     df = load_data("cards")
     st.dataframe(df, use_container_width=True)
+
