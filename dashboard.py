@@ -4,96 +4,159 @@ import os
 import plotly.express as px
 
 # --- CONFIGURATION ---
-FILE_NAME = "finance.csv"
-st.set_page_config(page_title="My Financial Core", page_icon="💰")
+st.set_page_config(page_title="My Financial Core", page_icon="💰", layout="wide")
+FINANCE_FILE = "finance.csv"
+CARDS_FILE = "cards.csv"
 
-st.title("My Financial Core 💰")
 
-# --- INPUT SECTION ---
-st.subheader("📝 New Entry")
-col1, col2 = st.columns(2)
+# --- HELPER FUNCTIONS ---
+def load_data(file_path, columns):
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        return pd.read_csv(file_path)
+    return pd.DataFrame(columns=columns)
 
-with col1:
-    date = st.date_input("Date")
-    item = st.text_input("Item Name")
-    payment_method = st.selectbox("Select Payment Method", ["Pix", "Credit Card", "Cash"])
 
-with col2:
-    category = st.selectbox("Category", ["Food", "Transport", "Housing", "Fun", "Investments"])
-    price = st.number_input("Price (R$)", step=0.01)
+def save_data(df, file_path):
+    df.to_csv(file_path, index=False)
 
-# --- SAVE BUTTON ---
-if st.button("Save Expense"):
-    new_data = pd.DataFrame({
-        "Date": [date],
-        "Category": [category],
-        "Item": [item],
-        "Price": [price],
-        "Payment Method": [payment_method]
-    })
 
-    if not os.path.exists(FILE_NAME):
-        new_data.to_csv(FILE_NAME, index=False)
-    else:
-        new_data.to_csv(FILE_NAME, mode='a', header=False, index=False)
+# --- SIDEBAR NAVIGATION ---
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["📊 Dashboard", "💳 Manage Cards"])
 
-    st.success("✅ Saved successfully!")
-    st.rerun()
+# ==============================================================================
+# PAGE 1: MANAGE CARDS (The Configuration Engine)
+# ==============================================================================
+if page == "💳 Manage Cards":
+    st.title("💳 Manage Credit Cards")
+    st.info("Add your credit cards here. The Dashboard will use these rules to calculate due dates.")
 
-st.divider()
+    # 1. INPUT FORM
+    with st.form("add_card_form"):
+        col1, col2, col3 = st.columns(3)
+        name = col1.text_input("Card Name (e.g., Nubank)")
+        closing_day = col2.number_input("Closing Day (Melhor Dia)", min_value=1, max_value=31)
+        due_day = col3.number_input("Due Day (Vencimento)", min_value=1, max_value=31)
 
-# --- HISTORY & ANALYTICS SECTION ---
-st.subheader("📊 History & Analytics")
+        submitted = st.form_submit_button("Save Card")
 
-# Check if file exists AND is not empty
-if os.path.exists(FILE_NAME) and os.path.getsize(FILE_NAME) > 0:
+    # 2. SAVE LOGIC
+    if submitted:
+        if name:
+            df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
 
-    # 1. LOAD DATA
-    df = pd.read_csv(FILE_NAME)
-
-    # 2. SIDEBAR FILTERS
-    st.sidebar.header("Filter Options")
-    all_categories = ["All"] + df["Category"].unique().tolist()
-    selected_category = st.sidebar.selectbox("Filter by Category", all_categories)
-
-    # 3. FILTER LOGIC
-    if selected_category == "All":
-        filtered_df = df
-    else:
-        filtered_df = df[df["Category"] == selected_category]
-
-    # 4. EDITABLE TABLE (The "Excel" Mode)
-    # We allow adding/deleting rows directly in the table
-    edited_df = st.data_editor(
-        filtered_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        key="editor"
-    )
-
-    # 5. SAVE CHANGES BUTTON (With Safety Lock 🔒)
-    # Only show this button if there is data to save
-    if st.button("💾 Update CSV with Changes"):
-        if selected_category != "All":
-            st.error("⚠️ SAFETY LOCK: Please switch filter to 'All' before saving changes.")
+            # Check if card already exists to avoid duplicates
+            if name in df_cards["Card Name"].values:
+                st.error(f"Card '{name}' already exists!")
+            else:
+                new_card = pd.DataFrame({
+                    "Card Name": [name],
+                    "Closing Day": [closing_day],
+                    "Due Day": [due_day]
+                })
+                # Append and Save
+                df_combined = pd.concat([df_cards, new_card], ignore_index=True)
+                save_data(df_combined, CARDS_FILE)
+                st.success(f"Card '{name}' added successfully!")
+                st.rerun()
         else:
-            edited_df.to_csv(FILE_NAME, index=False)
-            st.success("✅ Database Updated!")
+            st.warning("Please enter a Card Name.")
+
+    # 3. DISPLAY CARDS
+    st.divider()
+    st.subheader("My Cards")
+    df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
+
+    if not df_cards.empty:
+        # Editable table to fix mistakes
+        edited_cards = st.data_editor(df_cards, num_rows="dynamic", key="card_editor")
+
+        if st.button("💾 Update Cards"):
+            save_data(edited_cards, CARDS_FILE)
+            st.success("Card list updated!")
             st.rerun()
+    else:
+        st.info("No cards configured yet.")
 
-    # 6. METRICS & CHARTS
-    # We use 'edited_df' so the numbers update immediately when you edit the table
-    col_metric, col_chart = st.columns([1, 2])
+# ==============================================================================
+# PAGE 2: DASHBOARD (The Transaction Logger)
+# ==============================================================================
+elif page == "📊 Dashboard":
+    st.title("My Financial Core 💰")
 
-    with col_metric:
-        total_value = edited_df["Price"].sum()
-        st.metric("Total Spent", f"R$ {total_value:.2f}")
+    # --- LOAD CARDS FOR DROPDOWN ---
+    # We read the cards file to get the names for the dropdown
+    df_cards = load_data(CARDS_FILE, ["Card Name"])
+    card_options = df_cards["Card Name"].tolist()
 
-    with col_chart:
-        if not edited_df.empty:
-            summary = edited_df.groupby("Category")["Price"].sum().reset_index()
-            fig = px.pie(summary, values="Price", names="Category", title="Expenses Breakdown", hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
+    # Merge "Standard" methods with "My Cards"
+    payment_options = ["Pix", "Cash", "Debit"] + card_options
 
-else:
-    st.info("No expenses found. Add your first item above! 👆")
+    # --- INPUT SECTION ---
+    st.subheader("📝 New Entry")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        date = st.date_input("Date")
+        item = st.text_input("Item Name")
+
+    with col2:
+        category = st.selectbox("Category", ["Food", "Transport", "Housing", "Fun", "Investments"])
+        price = st.number_input("Price (R$)", step=0.01)
+
+    with col3:
+        # HERE IS THE MAGIC: The list updates automatically!
+        payment_method = st.selectbox("Payment Method", payment_options)
+
+    # --- SAVE BUTTON ---
+    if st.button("Save Expense"):
+        new_data = pd.DataFrame({
+            "Date": [date],
+            "Category": [category],
+            "Item": [item],
+            "Price": [price],
+            "Payment Method": [payment_method]
+        })
+
+        # Load existing file or create new
+        if os.path.exists(FINANCE_FILE):
+            new_data.to_csv(FINANCE_FILE, mode='a', header=False, index=False)
+        else:
+            new_data.to_csv(FINANCE_FILE, index=False)
+
+        st.success("✅ Saved successfully!")
+        st.rerun()
+
+    st.divider()
+
+    # --- HISTORY SECTION ---
+    st.subheader("📊 History")
+
+    if os.path.exists(FINANCE_FILE) and os.path.getsize(FINANCE_FILE) > 0:
+        df = pd.read_csv(FINANCE_FILE)
+
+        # Sidebar Filter
+        st.sidebar.header("Filter Dashboard")
+        all_cats = ["All"] + df["Category"].unique().tolist()
+        sel_cat = st.sidebar.selectbox("Category", all_cats)
+
+        if sel_cat != "All":
+            df = df[df["Category"] == sel_cat]
+
+        # Editable Table
+        edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="dash_editor")
+
+        if st.button("💾 Update History"):
+            if sel_cat != "All":
+                st.error("⚠️ Switch filter to 'All' before saving.")
+            else:
+                edited_df.to_csv(FINANCE_FILE, index=False)
+                st.success("Updated!")
+                st.rerun()
+
+        # Metrics
+        total = edited_df["Price"].sum()
+        st.metric("Total Spent", f"R$ {total:.2f}")
+
+    else:
+        st.info("No expenses yet.")
