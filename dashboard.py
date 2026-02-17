@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.express as px
+from dateutil.relativedelta import relativedelta  # New Math Tool!
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="My Financial Core", page_icon="💰", layout="wide")
@@ -20,143 +21,168 @@ def save_data(df, file_path):
     df.to_csv(file_path, index=False)
 
 
+# --- THE TIME MACHINE (LOGIC ENGINE) ---
+def generate_installments(date, item, price, category, payment_method, installments):
+    new_rows = []
+
+    # 1. Get Card Rules (if it's a credit card)
+    cards_df = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
+    card_rule = cards_df[cards_df["Card Name"] == payment_method]
+
+    is_credit_card = not card_rule.empty
+
+    # 2. Loop through installments (1 to N)
+    for i in range(installments):
+        current_date = date
+
+        # LOGIC: Credit Card Date Calculation
+        if is_credit_card:
+            closing_day = int(card_rule.iloc[0]["Closing Day"])
+            due_day = int(card_rule.iloc[0]["Due Day"])
+
+            # Base logic: If purchase is AFTER closing, bump to next month
+            # We also add 'i' months for the installments loop
+            months_to_add = i
+            if date.day > closing_day:
+                months_to_add += 1
+
+            # Calculate the target month/year
+            future_date = date + relativedelta(months=months_to_add)
+
+            # Set the exact Due Day
+            # (Handle short months like Feb: if Due Day is 30, it clamps to 28)
+            try:
+                final_date = future_date.replace(day=due_day)
+            except ValueError:
+                # Fallback for Feb 30 -> Feb 28
+                final_date = future_date + relativedelta(day=31)
+
+            row_date = final_date
+
+        else:
+            # Simple Logic (Pix/Cash): Just add months if it's recurrent, or keep same date
+            # For now, let's assume Pix installments are monthly too (like a recurrent bill)
+            row_date = date + relativedelta(months=i)
+
+        # 3. Create the Row
+        # If installments > 1, add (1/10) to the name
+        item_name = f"{item} ({i + 1}/{installments})" if installments > 1 else item
+        item_price = price / installments  # Split the price!
+
+        new_rows.append({
+            "Date": row_date,
+            "Category": category,
+            "Item": item_name,
+            "Price": item_price,
+            "Payment Method": payment_method
+        })
+
+    return pd.DataFrame(new_rows)
+
+
 # --- SIDEBAR NAVIGATION ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["📊 Dashboard", "💳 Manage Cards"])
 
 # ==============================================================================
-# PAGE 1: MANAGE CARDS (The Configuration Engine)
+# PAGE 1: MANAGE CARDS
 # ==============================================================================
 if page == "💳 Manage Cards":
     st.title("💳 Manage Credit Cards")
-    st.info("Add your credit cards here. The Dashboard will use these rules to calculate due dates.")
 
-    # 1. INPUT FORM
     with st.form("add_card_form"):
         col1, col2, col3 = st.columns(3)
-        name = col1.text_input("Card Name (e.g., Nubank)")
-        closing_day = col2.number_input("Closing Day (Melhor Dia)", min_value=1, max_value=31)
-        due_day = col3.number_input("Due Day (Vencimento)", min_value=1, max_value=31)
-
-        submitted = st.form_submit_button("Save Card")
-
-    # 2. SAVE LOGIC
-    if submitted:
-        if name:
-            df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
-
-            # Check if card already exists to avoid duplicates
-            if name in df_cards["Card Name"].values:
-                st.error(f"Card '{name}' already exists!")
-            else:
-                new_card = pd.DataFrame({
-                    "Card Name": [name],
-                    "Closing Day": [closing_day],
-                    "Due Day": [due_day]
-                })
-                # Append and Save
-                df_combined = pd.concat([df_cards, new_card], ignore_index=True)
-                save_data(df_combined, CARDS_FILE)
-                st.success(f"Card '{name}' added successfully!")
+        name = col1.text_input("Card Name")
+        closing_day = col2.number_input("Closing Day", 1, 31)
+        due_day = col3.number_input("Due Day", 1, 31)
+        if st.form_submit_button("Save Card"):
+            if name:
+                df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
+                new_card = pd.DataFrame({"Card Name": [name], "Closing Day": [closing_day], "Due Day": [due_day]})
+                save_data(pd.concat([df_cards, new_card], ignore_index=True), CARDS_FILE)
+                st.success(f"Card '{name}' saved!")
                 st.rerun()
-        else:
-            st.warning("Please enter a Card Name.")
 
-    # 3. DISPLAY CARDS
     st.divider()
-    st.subheader("My Cards")
     df_cards = load_data(CARDS_FILE, ["Card Name", "Closing Day", "Due Day"])
-
     if not df_cards.empty:
-        # Editable table to fix mistakes
-        edited_cards = st.data_editor(df_cards, num_rows="dynamic", key="card_editor")
-
-        if st.button("💾 Update Cards"):
-            save_data(edited_cards, CARDS_FILE)
-            st.success("Card list updated!")
-            st.rerun()
-    else:
-        st.info("No cards configured yet.")
+        st.data_editor(df_cards, key="card_editor", num_rows="dynamic")
 
 # ==============================================================================
-# PAGE 2: DASHBOARD (The Transaction Logger)
+# PAGE 2: DASHBOARD
 # ==============================================================================
 elif page == "📊 Dashboard":
     st.title("My Financial Core 💰")
 
-    # --- LOAD CARDS FOR DROPDOWN ---
-    # We read the cards file to get the names for the dropdown
+    # Load Card Options
     df_cards = load_data(CARDS_FILE, ["Card Name"])
-    card_options = df_cards["Card Name"].tolist()
-
-    # Merge "Standard" methods with "My Cards"
-    payment_options = ["Pix", "Cash", "Debit"] + card_options
+    payment_options = ["Pix", "Cash"] + df_cards["Card Name"].tolist()
 
     # --- INPUT SECTION ---
     st.subheader("📝 New Entry")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)  # Added a 4th column for Installments!
 
     with col1:
         date = st.date_input("Date")
         item = st.text_input("Item Name")
-
     with col2:
         category = st.selectbox("Category", ["Food", "Transport", "Housing", "Fun", "Investments"])
-        price = st.number_input("Price (R$)", step=0.01)
-
+        price = st.number_input("Total Price (R$)", step=0.01)
     with col3:
-        # HERE IS THE MAGIC: The list updates automatically!
         payment_method = st.selectbox("Payment Method", payment_options)
+    with col4:
+        # THE NEW FEATURE: INSTALLMENTS
+        installments = st.number_input("Installments", min_value=1, max_value=24, value=1, step=1)
 
-    # --- SAVE BUTTON ---
-    if st.button("Save Expense"):
-        new_data = pd.DataFrame({
-            "Date": [date],
-            "Category": [category],
-            "Item": [item],
-            "Price": [price],
-            "Payment Method": [payment_method]
-        })
+    # --- SAVE LOGIC ---
+    if st.button("Generate & Save"):
+        if price > 0 and item:
+            # Call the Time Machine Function
+            new_df = generate_installments(date, item, price, category, payment_method, installments)
 
-        # Load existing file or create new
-        if os.path.exists(FINANCE_FILE):
-            new_data.to_csv(FINANCE_FILE, mode='a', header=False, index=False)
+            # Save to CSV
+            if os.path.exists(FINANCE_FILE):
+                new_df.to_csv(FINANCE_FILE, mode='a', header=False, index=False)
+            else:
+                new_df.to_csv(FINANCE_FILE, index=False)
+
+            st.success(f"✅ Generated {installments} installments for '{item}'!")
+            st.rerun()
         else:
-            new_data.to_csv(FINANCE_FILE, index=False)
-
-        st.success("✅ Saved successfully!")
-        st.rerun()
+            st.error("Please enter an Item and Price.")
 
     st.divider()
 
-    # --- HISTORY SECTION ---
-    st.subheader("📊 History")
-
-    if os.path.exists(FINANCE_FILE) and os.path.getsize(FINANCE_FILE) > 0:
+    # --- HISTORY & FORECAST SECTION ---
+    if os.path.exists(FINANCE_FILE):
         df = pd.read_csv(FINANCE_FILE)
 
-        # Sidebar Filter
-        st.sidebar.header("Filter Dashboard")
-        all_cats = ["All"] + df["Category"].unique().tolist()
-        sel_cat = st.sidebar.selectbox("Category", all_cats)
+        # 1. CONVERT TO DATE OBJECTS (Crucial for sorting)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values(by="Date", ascending=False)
 
-        if sel_cat != "All":
-            df = df[df["Category"] == sel_cat]
+        # 2. CREATE A "MONTH-YEAR" COLUMN (e.g., "2024-03")
+        # This allows us to group expenses by month
+        df["Month"] = df["Date"].dt.to_period("M").astype(str)
 
-        # Editable Table
-        edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="dash_editor")
+        st.subheader("🔮 Cash Flow Forecast")
 
-        if st.button("💾 Update History"):
-            if sel_cat != "All":
-                st.error("⚠️ Switch filter to 'All' before saving.")
-            else:
-                edited_df.to_csv(FINANCE_FILE, index=False)
-                st.success("Updated!")
-                st.rerun()
+        # 3. GROUP BY MONTH (The Analysis)
+        # We sum all prices for each month
+        monthly_expenses = df.groupby("Month")["Price"].sum().reset_index()
 
-        # Metrics
-        total = edited_df["Price"].sum()
-        st.metric("Total Spent", f"R$ {total:.2f}")
+        # 4. THE FORECAST CHART
+        # A Bar Chart showing how much you owe in future months
+        fig = px.bar(
+            monthly_expenses,
+            x="Month",
+            y="Price",
+            title="Monthly Spending (Past & Future)",
+            text_auto='.2s'  # Shows the number on top of the bar
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    else:
-        st.info("No expenses yet.")
+        # 5. THE DETAILED TABLE
+        st.divider()
+        st.subheader("📝 Transaction Log")
+        st.dataframe(df, use_container_width=True)
