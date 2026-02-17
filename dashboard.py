@@ -16,6 +16,7 @@ col1, col2 = st.columns(2)
 with col1:
     date = st.date_input("Date")
     item = st.text_input("Item Name")
+    payment_method = st.selectbox("Select Payment Method", ["Pix", "Credit Card", "Cash"])
 
 with col2:
     category = st.selectbox("Category", ["Food", "Transport", "Housing", "Fun", "Investments"])
@@ -27,7 +28,8 @@ if st.button("Save Expense"):
         "Date": [date],
         "Category": [category],
         "Item": [item],
-        "Price": [price]
+        "Price": [price],
+        "Payment Method": [payment_method]
     })
 
     if not os.path.exists(FILE_NAME):
