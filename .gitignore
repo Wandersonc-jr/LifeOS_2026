@@ -1,20 +1,17 @@
-Plaintext
-# 1. Ignore the Virtual Environment (Too big)
+# Python virtual environments
+venv/
 .venv/
 env/
-venv/
-
-# 2. Ignore Python Trash (Temporary files)
-_pycache_/
+__pycache__/
 *.pyc
 
-# 3. Ignore Secrets (CRITICAL SECURITY)
-.env
-config.py
-secrets.json
-*.key
+# Local Database (Keep your data private!)
+data/finance.db
+*.db
 
-# 4. Ignore Data (Keep big data local)
-*.csv
-*.xlsx
-*.ds_store
+# IDE settings
+.idea/
+.vscode/
+
+# Streamlit secrets (if you ever use them)
+.streamlit/secrets.toml

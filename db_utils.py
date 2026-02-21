@@ -1,0 +1,142 @@
+import sqlite3
+import pandas as pd
+from dateutil.relativedelta import relativedelta
+from datetime import date as dt_class
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+DB_NAME = "finance.db"
+
+
+def get_connection():
+    return sqlite3.connect(DB_NAME)
+
+
+def run_query(query, params=()):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+
+
+def load_data(table_name):
+    with get_connection() as conn:
+        try:
+            return pd.read_sql(f"SELECT * FROM {table_name}", conn)
+        except:
+            return pd.DataFrame()
+
+
+def generate_installments(date, item, price, category, payment_method, installments):
+    new_rows = []
+    cards_df = load_data("cards")
+    card_rule = cards_df[cards_df["card_name"] == payment_method]
+    is_credit_card = not card_rule.empty
+
+    for i in range(installments):
+        if is_credit_card:
+            closing_day = int(card_rule.iloc[0]["closing_day"])
+            due_day = int(card_rule.iloc[0]["due_day"])
+            months_to_add = i + (1 if date.day > closing_day else 0)
+            row_date = (date + relativedelta(months=months_to_add)).replace(day=due_day)
+        else:
+            row_date = date + relativedelta(months=i)
+
+        item_name = f"{item} ({i + 1}/{installments})" if installments > 1 else item
+        new_rows.append((row_date, category, item_name, round(price / installments, 2), payment_method, 0))
+    return new_rows
+
+
+def check_and_insert_recurring():
+    current_month_year = dt_class.today().strftime("%Y-%m")
+    with get_connection() as conn:
+        # 1. Check if we ALREADY added recurring items this month
+        # We look for a unique string like 'AUTO-RECURRING' to avoid duplicates
+        check_query = "SELECT COUNT(*) FROM expenses WHERE Item LIKE '%[AUTO]%' AND strftime('%Y-%m', Date) = ?"
+        already_done = pd.read_sql(check_query, conn, params=(current_month_year,)).iloc[0, 0]
+
+        if already_done == 0:
+            recurring_items = pd.read_sql("SELECT * FROM recurring WHERE active = 1", conn)
+
+            if not recurring_items.empty:
+                cursor = conn.cursor()
+                for _, row in recurring_items.iterrows():
+                    # Set the date to the current month + the day defined in the rule
+                    day = min(int(row['day_of_month']), 28)
+                    target_date = dt_class.today().replace(day=day).strftime("%Y-%m-%d")
+
+                    # Add '[AUTO]' to the name so the system knows it was added automatically
+                    new_item_name = f"{row['item']} [AUTO]"
+
+                    cursor.execute("""
+                                   INSERT INTO expenses (Date, Category, Item, Price, "Payment Method", paid)
+                                   VALUES (?, ?, ?, ?, ?, ?)
+                                   """, (target_date, row['category'], new_item_name, row['price'], 'Pix', 0))
+
+                conn.commit()
+                return True
+    return False
+
+
+def delete_record(table, record_id):
+    run_query(f"DELETE FROM {table} WHERE id = ?", (record_id,))
+
+
+# --- EMAIL ENGINE ---
+def send_financial_report(recipient_email, subject, body):
+    # IMPORTANT: Replace these with your actual Gmail/App Password
+    sender_email = "your-email@gmail.com"
+    app_password = "xxxx xxxx xxxx xxxx"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, app_password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        return False
+
+
+def generate_monthly_summary_text():
+    df_exp = load_data("expenses")
+    df_inc = load_data("incomes")
+
+    if df_exp.empty and df_inc.empty:
+        return "No data found for the current month."
+
+    curr_month = dt_class.today().strftime("%Y-%m")
+
+    # Ensure date conversion for safe filtering
+    df_exp["Date"] = pd.to_datetime(df_exp["Date"])
+    df_inc["Date"] = pd.to_datetime(df_inc["Date"])
+
+    m_exp = df_exp[df_exp["Date"].dt.strftime("%Y-%m") == curr_month]
+    m_inc = df_inc[df_inc["Date"].dt.strftime("%Y-%m") == curr_month]
+
+    total_spent = m_exp["Price"].sum()
+    total_earned = m_inc["Price"].sum()
+    savings = total_earned - total_spent
+
+    summary = f"""
+    🏦 LifeOS 2026 - Monthly Financial Report ({curr_month})
+    --------------------------------------------------
+    💰 Total Income:   R$ {total_earned:,.2f}
+    💸 Total Expenses: R$ {total_spent:,.2f}
+    --------------------------------------------------
+    🐷 Net Savings:    R$ {savings:,.2f}
+
+    Status: {"Well done! You're in the green." if savings >= 0 else "Alert: You've spent more than you earned."}
+
+    Generated by your Financial LifeOS.
+    """
+    return summary

@@ -1,0 +1,12 @@
+Date,Category,Item,Price,Payment Method
+2026-02-17,Food,Coffee,14.0,Pix
+2026-02-17,Food,Supermarket,192.0,Pix
+2026-03-10,Transport,Teste (1/6),166.66666666666666,Itaú
+2026-04-10,Transport,Teste (2/6),166.66666666666666,Itaú
+2026-05-10,Transport,Teste (3/6),166.66666666666666,Itaú
+2026-06-10,Transport,Teste (4/6),166.66666666666666,Itaú
+2026-07-10,Transport,Teste (5/6),166.66666666666666,Itaú
+2026-08-10,Transport,Teste (6/6),166.66666666666666,Itaú
+2026-02-17,Housing,None (1/3),133.33,Pix
+2026-03-17,Housing,None (2/3),133.33,Pix
+2026-04-17,Housing,None (3/3),133.33,Pix
