@@ -1,17 +1,37 @@
-# Python virtual environments
+# --- 1. ENVIRONMENT & DEPENDENCIES ---
 venv/
 .venv/
 env/
+bin/
+lib/
+include/
+# Ignore Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Local Database (Keep your data private!)
-data/finance.db
+# --- 2. DATA & SECURITY (CRITICAL) ---
+# Ignore the actual database files
+finance.db
 *.db
+# Ignore SQLite temporary/journal files
+*.db-journal
+*.db-shm
+*.db-wal
+# Ignore your secret credentials
+.streamlit/secrets.toml
 
-# IDE settings
+# --- 3. IDE & SYSTEM FILES ---
 .idea/
 .vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
 
-# Streamlit secrets (if you ever use them)
-.streamlit/secrets.toml
+# --- 4. LOGS & EXPORTS ---
+*.log
+exports/
+reports/*.pdf
+reports/*.csv

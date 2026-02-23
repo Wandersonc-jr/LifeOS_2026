@@ -4,15 +4,48 @@ import sqlite3
 import plotly.express as px
 from dateutil.relativedelta import relativedelta
 from datetime import date as dt_class
-from db_utils import *
+
+# --- TRIGGER AUTO-DISPATCH ---
+try:
+    user_email = st.secrets["email"]["sender_email"]
+    if auto_dispatch_monthly_report(user_email):
+        st.toast(f"📬 Monthly report sent automatically!", icon="🚀")
+except Exception:
+    pass # Secrets not configured yet
+
+# Import our custom logic
+import db_utils
+from db_utils import * # --- 1. APP CONFIGURATION ---
+st.set_page_config(
+    page_title="LifeOS 2026 | Production",
+    page_icon="🛡️",
+    layout="wide"
+)
+
+if 'active_page' not in st.session_state:
+    st.session_state.active_page = "📊 Dashboard"
+
+def nav_to(page_name):
+    st.session_state.active_page = page_name
+    st.rerun()
 
 # --- UI HELPER FUNCTIONS ---
-def metric_card(label, value, prefix="R$ "):
-    """Renders a clean, modern metric card using HTML/CSS."""
+# --- UPDATE THIS FUNCTION ---
+def metric_card(label, value, color_bg, color_text, desc=""):
+    """
+    Standardized Fintech Metric Card.
+    Arguments:
+    - label: The title of the metric
+    - value: The numerical amount
+    - color_bg: Background color (rgba)
+    - color_text: Primary accent color (hex)
+    - desc: Sub-text description
+    """
     st.markdown(f"""
-    <div class="fintech-card" style="padding: 15px; text-align: center;">
-        <p style="color: #8B949E; font-size: 12px; margin:0; text-transform: uppercase;">{label}</p>
-        <h2 style="margin:0; border:none; font-size: 24px;">{prefix}{value:,.2f}</h2>
+    <div style="background: {color_bg}; padding: 18px; border-radius: 12px; border-left: 5px solid {color_text}; text-align: center; height: 120px; border-top: 1px solid rgba(255,255,255,0.05);">
+        <p style="color: #8B949E; font-size: 11px; font-weight: bold; margin:0; text-transform: uppercase; letter-spacing: 0.5px;">{label}</p>
+        <h2 style="margin:5px 0; border:none; font-size: 24px; color: white; font-weight: 800;">R$ {value:,.2f}</h2>
+        <p style="margin:0; color: {color_text}; font-size: 11px; font-weight: bold; opacity: 0.9;">{desc}</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -46,6 +79,12 @@ if st.sidebar.button("📊 Dashboard", use_container_width=True): nav_to("📊 D
 if st.sidebar.button("📈 Investments", use_container_width=True): nav_to("📈 Investments")
 if st.sidebar.button("📈 Wealth Command", use_container_width=True): nav_to("📈 Wealth Command")
 
+# TIER 2: GROWTH (New Sections)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🚀 GROWTH")
+if st.sidebar.button("🇺🇸 English Training", use_container_width=True): nav_to("English Training")
+if st.sidebar.button("💻 Dev Portfolio", use_container_width=True): nav_to("Project Management")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 💸 OPERATIONAL")
 if st.sidebar.button("💸 Expenses", use_container_width=True): nav_to("💸 Expenses")
@@ -61,32 +100,221 @@ if st.sidebar.button("🏷️ Categories", use_container_width=True): nav_to("�
 page = st.session_state.active_page
 st.sidebar.info(f"📍 {page}")
 
+# --- 4. DATA ENGINE & INFRASTRUCTURE PROVISIONING ---
+DB_NAME = "finance.db"
 
-# --- 4. DATA ENGINE (FIXED ID LOADER) ---
+
 def get_connection():
     return sqlite3.connect(DB_NAME)
 
-def load_data(table_name):
-    """Standard loader for configuration tables."""
-    with get_connection() as conn:
-        try:
-            return pd.read_sql(f"SELECT * FROM {table_name}", conn)
-        except:
-            return pd.DataFrame()
-
-def load_data_with_id(table_name):
-    """Special loader for Incomes/Expenses: FORCES 'rowid' to act as 'id'."""
-    with get_connection() as conn:
-        try:
-            return pd.read_sql(f"SELECT rowid as id, * FROM {table_name}", conn)
-        except:
-            return pd.DataFrame()
 
 def run_query(query, params=()):
+    """
+    Standardized SQL Execution Engine.
+    Handles both Data Retrieval (SELECT) and State Changes (INSERT/UPDATE/DELETE).
+    """
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
+        if query.strip().upper().startswith("SELECT"):
+            return pd.read_sql(query, conn, params=params)
+        else:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            return None
+
+
+def initialize_system_db():
+    """
+    SECURITY & DATA INTEGRITY:
+    Provision all required tables with standardized schemas.
+    This ensures the 'Physical Infrastructure' of the database is sound.
+    """
+    # 1. CORE FINANCIALS
+    run_query('''CREATE TABLE IF NOT EXISTS incomes
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     Date
+                     TEXT,
+                     Category
+                     TEXT,
+                     Item
+                     TEXT,
+                     Price
+                     REAL
+                 )''')
+
+    run_query('''CREATE TABLE IF NOT EXISTS expenses
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     Date
+                     TEXT,
+                     Category
+                     TEXT,
+                     Item
+                     TEXT,
+                     Price
+                     REAL,
+                     "Payment Method"
+                     TEXT,
+                     paid
+                     INTEGER
+                     DEFAULT
+                     0
+                 )''')
+
+    # 2. OPERATIONAL SETTINGS
+    run_query("CREATE TABLE IF NOT EXISTS budgets (category TEXT PRIMARY KEY, amount REAL)")
+    run_query("CREATE TABLE IF NOT EXISTS categories (name TEXT PRIMARY KEY, type TEXT)")
+    run_query(
+        "CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY AUTOINCREMENT, card_name TEXT, closing_day INTEGER, due_day INTEGER, active INTEGER)")
+
+    # 3. RECURRING & INVESTMENTS
+    run_query('''CREATE TABLE IF NOT EXISTS recurring
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     item
+                     TEXT,
+                     category
+                     TEXT,
+                     price
+                     REAL,
+                     payment_method
+                     TEXT,
+                     day_of_month
+                     INTEGER,
+                     active
+                     INTEGER
+                     DEFAULT
+                     1
+                 )''')
+
+    run_query('''CREATE TABLE IF NOT EXISTS investments
+                 (
+                     Asset
+                     TEXT
+                     PRIMARY
+                     KEY,
+                     Category
+                     TEXT,
+                     Date
+                     TEXT,
+                     Quantity
+                     REAL,
+                     Amount
+                     REAL,
+                     Current_Value
+                     REAL
+                 )''')
+
+    # 4. GROWTH & PERFORMANCE (English & Projects)
+    run_query('''CREATE TABLE IF NOT EXISTS vocabulary
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     word
+                     TEXT,
+                     sentence
+                     TEXT,
+                     date
+                     TEXT
+                 )''')
+
+    run_query('''CREATE TABLE IF NOT EXISTS habit_list
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     habit_name
+                     TEXT
+                 )''')
+
+    run_query('''CREATE TABLE IF NOT EXISTS daily_habits
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     habit_name
+                     TEXT,
+                     date
+                     TEXT,
+                     completed
+                     INTEGER
+                 )''')
+
+    run_query('''CREATE TABLE IF NOT EXISTS dev_tasks
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     task_name
+                     TEXT,
+                     status
+                     TEXT,
+                     priority
+                     TEXT,
+                     completed
+                     INTEGER
+                 )''')
+
+
+# --- TRIGGER BOOTSTRAP ---
+# Must run before any data loaders are called
+initialize_system_db()
+
+
+# --- 5. FAULT-TOLERANT LOADERS ---
+def load_data(table_name):
+    """Fetches data but prevents crashes if the table hasn't been initialized yet."""
+    try:
+        res = run_query(f"SELECT * FROM {table_name}")
+        return res if res is not None else pd.DataFrame()
+    except Exception:
+        # Graceful Degradation: Return empty DF to keep the UI running
+        return pd.DataFrame()
+
+
+def load_data_with_id(table_name):
+    """Same as load_data, optimized for tables requiring physical IDs."""
+    try:
+        res = run_query(f"SELECT * FROM {table_name}")
+        return res if res is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+# --- LOADERS ---
+def load_data(table_name):
+    """Standard loader for configuration tables."""
+    res = run_query(f"SELECT * FROM {table_name}")
+    return res if res is not None else pd.DataFrame()
+
+def load_data_with_id(table_name):
+    """
+    Security Note: Since we use PRIMARY KEY AUTOINCREMENT on 'id',
+    we no longer need to rely on the 'rowid' hack.
+    """
+    res = run_query(f"SELECT * FROM {table_name}")
+    return res if res is not None else pd.DataFrame()
 
 # --- GLOBAL REFRESH ---
 df_exp_all = load_data_with_id("expenses")
@@ -134,176 +362,126 @@ if not df_inc_all.empty: df_inc_all["Date"] = pd.to_datetime(df_inc_all["Date"])
 # ==============================================================================
 if page == "📊 Dashboard":
 
-    # --- 1. DATA PREP ---
-    curr_month_str = dt_class.today().strftime("%Y-%m")
-    today_str = dt_class.today().strftime("%Y-%m-%d")
+    # --- 1. DATA PREP (Unified Pipeline) ---
+    today = pd.Timestamp.now()
+    curr_month_str = today.strftime("%Y-%m")
 
-    m_exp = df_exp_all[pd.to_datetime(df_exp_all["Date"]).dt.strftime(
-        "%Y-%m") == curr_month_str] if not df_exp_all.empty else pd.DataFrame()
-    m_inc = df_inc_all[pd.to_datetime(df_inc_all["Date"]).dt.strftime(
-        "%Y-%m") == curr_month_str] if not df_inc_all.empty else pd.DataFrame()
+    # Standardize dates for the whole session
+    for df in [df_exp_all, df_inc_all]:
+        if not df.empty:
+            df["Date"] = pd.to_datetime(df["Date"])
+
+    # Current Month Calculations
+    m_exp = df_exp_all[
+        df_exp_all["Date"].dt.strftime("%Y-%m") == curr_month_str] if not df_exp_all.empty else pd.DataFrame()
+    m_inc = df_inc_all[
+        df_inc_all["Date"].dt.strftime("%Y-%m") == curr_month_str] if not df_inc_all.empty else pd.DataFrame()
 
     income_val = m_inc["Price"].sum() if not m_inc.empty else 0.0
     expense_val = m_exp["Price"].sum() if not m_exp.empty else 0.0
+    paid_mtd = m_exp[m_exp["paid"].isin([1, True, "1"])]["Price"].sum() if not m_exp.empty else 0.0
 
-    total_cash = (df_inc_all["Price"].sum() if not df_inc_all.empty else 0) - (
-        df_exp_all["Price"].sum() if not df_exp_all.empty else 0)
-    total_invested = df_inv["Amount"].sum() if not df_inv.empty else 0
+    # Terminology Refinement
+    disposable_income = income_val - paid_mtd
+    burn_rate = (expense_val / income_val * 100) if income_val > 0 else 0.0
+
+    # Strategic Totals
+    total_inc_all = df_inc_all["Price"].sum() if not df_inc_all.empty else 0.0
+    total_exp_all = df_exp_all["Price"].sum() if not df_exp_all.empty else 0.0
+    total_cash = total_inc_all - total_exp_all
+    total_invested = df_inv["Amount"].sum() if not df_inv.empty else 0.0
     net_worth = total_cash + total_invested
 
-    # --- TIER 0: EXECUTIVE SUMMARY ---
-    st.markdown("## 🏛️ Executive Summary")
-
-    # Custom CSS for the "Value Blocks"
-    st.markdown("""
-        <style>
-        .main-card {
-            background-color: #1a1c24;
-            padding: 20px;
-            border-radius: 15px;
-            border-top: 4px solid #3b82f6;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-        .metric-label { color: #94a3b8; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; margin-bottom: 5px; }
-        .metric-value { color: #f8fafc; font-size: 1.6rem; font-weight: 700; margin: 0; }
-        </style>
-    """, unsafe_allow_html=True)
-
+    # --- ZONE 1: STRATEGIC CAPITAL (The "Block" Build) ---
+    st.markdown("## 🏛️ Strategic Capital")
     c1, c2, c3 = st.columns(3)
+
     with c1:
-        st.markdown(
-            f'<div class="main-card"><p class="metric-label">Liquid Cash</p><p class="metric-value">R$ {total_cash:,.2f}</p></div>',
-            unsafe_allow_html=True)
+        # Security Perspective: "Account Liquidity" - Immediate cash available for deployment
+        metric_card("Liquid Assets", total_cash, "rgba(59, 130, 246, 0.1)", "#3b82f6", "Account Liquidity")
     with c2:
-        st.markdown(
-            f'<div class="main-card" style="border-top-color: #8b5cf6;"><p class="metric-label">Investments</p><p class="metric-value">R$ {total_invested:,.2f}</p></div>',
-            unsafe_allow_html=True)
+        # Native English: "Yield Assets" - Capital specifically allocated to grow
+        metric_card("Invested Capital", total_invested, "rgba(139, 92, 246, 0.1)", "#8b5cf6", "Yield Assets")
     with c3:
-        st.markdown(
-            f'<div class="main-card" style="border-top-color: #10b981;"><p class="metric-label">Net Worth</p><p class="metric-value">R$ {net_worth:,.2f}</p></div>',
-            unsafe_allow_html=True)
+        # Executive English: "Total System Value" - The ultimate health check
+        metric_card("Net Equity", net_worth, "rgba(16, 185, 129, 0.1)", "#10b981", "Total System Value")
 
     st.divider()
 
-    # --- TIER 1: MONTHLY PERFORMANCE ---
-    st.markdown("## 🗓️ Monthly Flow")
+    # --- ZONE 2: OPERATIONAL VELOCITY ---
+    st.markdown("### 📊 Operational Velocity")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        metric_card("Gross Inflow", income_val, "rgba(16, 185, 129, 0.05)", "#10b981", "Total Revenue")
+    with m2:
+        metric_card("Gross Outflow", expense_val, "rgba(239, 68, 68, 0.05)", "#ef4444", f"Burn: {burn_rate:.1f}%")
+    with m3:
+        metric_card("Cleared Debts", paid_mtd, "rgba(245, 158, 11, 0.05)", "#f59e0b", "Settled MTD")
+    with m4:
+        metric_card("Disposable", disposable_income, "rgba(59, 130, 246, 0.05)", "#3b82f6", "Unallocated")
 
-    savings_val = income_val - expense_val
-    savings_pct = (savings_val / income_val * 100) if income_val > 0 else 0
-    burn_rate = (expense_val / income_val * 100) if income_val > 0 else 0
+    # --- ZONE 3: PENDING OBLIGATIONS (The "Security" View) ---
+    st.markdown("<br>", unsafe_allow_html=True)  # Requested blank space
+    st.markdown("### 💳 Liability & Settlement Pipeline")
 
-    mc1, mc2, mc3 = st.columns(3)
-    # Style these with containers for better alignment
-    with mc1:
-        st.markdown(
-            f'<div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; border-left: 4px solid #10b981;">'
-            f'<p style="color: #10b981; font-weight: bold; margin:0;">+ Income</p><h3 style="margin:0;">R$ {income_val:,.2f}</h3></div>',
-            unsafe_allow_html=True)
-    with mc2:
-        st.markdown(
-            f'<div style="background: rgba(239, 68, 68, 0.1); padding: 15px; border-radius: 10px; border-left: 4px solid #ef4444;">'
-            f'<p style="color: #ef4444; font-weight: bold; margin:0;">- Expenses</p><h3 style="margin:0;">R$ {expense_val:,.2f}</h3><small>Burn Rate: {burn_rate:.1f}%</small></div>',
-            unsafe_allow_html=True)
-    with mc3:
-        st.markdown(
-            f'<div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 10px; border-left: 4px solid #3b82f6;">'
-            f'<p style="color: #3b82f6; font-weight: bold; margin:0;">= Margin</p><h3 style="margin:0;">R$ {savings_val:,.2f}</h3><small>Savings Rate: {savings_pct:.1f}%</small></div>',
-            unsafe_allow_html=True)
-
-    # --- TIER 2: CONTROL CENTER ---
-    st.divider()
-    st.markdown("### 🚩 Control Center")
-
-    # 1. Fetch Global Unpaid Data for the middle block
-    # We filter the all-time dataframe for any status that means "not paid"
+    # 1. Filtering Logic (Optimized for performance)
+    today_cutoff = today.strftime("%Y-%m")
     if not df_exp_all.empty:
-        unpaid_global_df = df_exp_all[df_exp_all["paid"].isin([0, False, "0"])]
-        pending_global_val = unpaid_global_df["Price"].sum()
+        mask_pending = (df_exp_all["paid"].isin([0, False, "0"]) &
+                        (df_exp_all["Date"].dt.strftime("%Y-%m") <= today_cutoff))
+        unpaid_current = df_exp_all[mask_pending].copy()
     else:
-        pending_global_val = 0.0
+        unpaid_current = pd.DataFrame()
 
-    # 2. Logic for Monthly Liquid Control
-    # Already Settled: Only what was paid THIS MONTH (Matches Tier 1)
-    paid_mtd = m_exp[m_exp["paid"] == 1]["Price"].sum() if not m_exp.empty else 0.0
+    # 2. UI Rendering
+    if not unpaid_current.empty:
+        # --- SECURITY RISK ASSESSMENT ---
+        overdue = unpaid_current[unpaid_current["Date"].dt.strftime("%Y-%m") < today_cutoff]
 
-    # Cash Remaining: Total Monthly Income minus what actually left the account (Paid)
-    cash_remaining = income_val - paid_mtd
+        if not overdue.empty:
+            # Using a native financial term: "Delinquent Accounts"
+            st.error(
+                f"🚨 **Critical Alert:** Found {len(overdue)} delinquent items from previous cycles. Immediate action required.")
+        else:
+            st.info("ℹ️ **Status:** All pending items are within the current billing cycle.")
 
-    # 3. Design Blocks
-    cc1, cc2, cc3 = st.columns(3)
-
-    with cc1:
-        st.markdown(f'''
-            <div style="background: rgba(16, 185, 129, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.2); border-top: 4px solid #10b981;">
-                <p style="color: #10b981; font-weight: bold; margin:0; font-size: 0.8rem;">ALREADY SETTLED (MTD)</p>
-                <h3 style="margin:0; font-size: 1.4rem;">R$ {paid_mtd:,.2f}</h3>
-            </div>
-        ''', unsafe_allow_html=True)
-
-    with cc2:
-        # UPDATED: This now shows Global Debt (Past + Present)
-        st.markdown(f'''
-            <div style="background: rgba(245, 158, 11, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(245, 158, 11, 0.2); border-top: 4px solid #f59e0b;">
-                <p style="color: #f59e0b; font-weight: bold; margin:0; font-size: 0.8rem;">TOTAL PENDING (GLOBAL)</p>
-                <h3 style="margin:0; font-size: 1.4rem;">R$ {pending_global_val:,.2f}</h3>
-            </div>
-        ''', unsafe_allow_html=True)
-
-    with cc3:
-        st.markdown(f'''
-            <div style="background: rgba(59, 130, 246, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(59, 130, 246, 0.2); border-top: 4px solid #3b82f6;">
-                <p style="color: #3b82f6; font-weight: bold; margin:0; font-size: 0.8rem;">CASH REMAINING</p>
-                <h3 style="margin:0; font-size: 1.4rem;">R$ {cash_remaining:,.2f}</h3>
-            </div>
-        ''', unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # --- PENDING ACTIONS TABS ---
-
-    # 1. Use the main dataframe (df_exp_all) which we know is working
-    if not df_exp_all.empty:
-        # Filter for EVERYTHING unpaid (0, False, or "0")
-        unpaid_all_time = df_exp_all[df_exp_all["paid"].isin([0, False, "0"])]
-    else:
-        unpaid_all_time = pd.DataFrame()
-
-    # 2. RENDER TABS
-    if not unpaid_all_time.empty:
-        tab_cards, tab_tasks = st.tabs(["💳 Credit Card Balances", "💸 Manual Payments"])
+        # 3. SETTLEMENT TABS
+        tab_cards, tab_tasks = st.tabs(["💳 Institutional Debt (Cards)", "💸 Direct Settlements (Pix/Cash)"])
 
         with tab_cards:
-            # Filter for anything NOT Pix or Cash
-            cards_only = unpaid_all_time[~unpaid_all_time["Payment Method"].isin(["Pix", "Cash"])]
-
+            cards_only = unpaid_current[~unpaid_current["Payment Method"].isin(["Pix", "Cash"])]
             if not cards_only.empty:
                 card_sums = cards_only.groupby("Payment Method")["Price"].sum().reset_index()
+
+                # Improved Design: Use columns for a "Bank App" look
                 cols = st.columns(len(card_sums))
                 for i, row in card_sums.iterrows():
                     with cols[i]:
-                        st.metric(row["Payment Method"], f"R$ {row['Price']:,.2f}")
-                        # Unique key to prevent Streamlit errors
-                        if st.button(f"Settle {row['Payment Method']}", key=f"btn_settle_{row['Payment Method']}"):
+                        # Native English: "Outstanding Balance"
+                        st.markdown(f"""
+                            <div style="background: rgba(255, 75, 75, 0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(255, 75, 75, 0.2);">
+                                <p style="margin:0; font-size: 0.8rem; color: #94a3b8;">{row['Payment Method']}</p>
+                                <h3 style="margin:0; color: #ff4b4b;">R$ {row['Price']:,.2f}</h3>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        if st.button(f"Settle {row['Payment Method']}", key=f"btn_settle_{row['Payment Method']}",
+                                     use_container_width=True):
                             run_query('UPDATE expenses SET paid = 1 WHERE "Payment Method" = ? AND paid = 0',
                                       (row["Payment Method"],))
-                            st.success(f"Settled {row['Payment Method']}!")
+                            st.success(f"Account {row['Payment Method']} Cleared!")
                             st.rerun()
             else:
-                st.success("All credit cards clear! ✅")
+                st.success("All credit accounts are currently in good standing. ✅")
 
         with tab_tasks:
-            # Filter for Pix and Cash
-            pix_cash = unpaid_all_time[unpaid_all_time["Payment Method"].isin(["Pix", "Cash"])].copy()
-
+            pix_cash = unpaid_current[unpaid_current["Payment Method"].isin(["Pix", "Cash"])].copy()
             if not pix_cash.empty:
-                st.info("Check boxes to settle individual items.")
-                # Standardize date for sorting
-                pix_cash["Date"] = pd.to_datetime(pix_cash["Date"]).dt.date
+                # Native English: "Itemized Obligations"
+                st.caption("Itemized manual payments requiring verification:")
+                pix_cash["Date"] = pix_cash["Date"].dt.date
                 pix_cash = pix_cash.sort_values("Date", ascending=True)
 
+                # Security Design: The data_editor acts as our "Audit Log"
                 edited_df = st.data_editor(
                     pix_cash[["id", "Date", "Category", "Item", "Price", "paid"]],
                     hide_index=True,
@@ -313,44 +491,100 @@ if page == "📊 Dashboard":
                         "id": None,
                         "Date": st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
                         "Price": st.column_config.NumberColumn("Amount", format="R$ %.2f"),
-                        "paid": st.column_config.CheckboxColumn("Done?")
+                        "paid": st.column_config.CheckboxColumn("Settle?")
                     },
                     disabled=["Date", "Category", "Item", "Price"]
                 )
 
-                # Logic to detect the checkmark
                 for i in range(len(edited_df)):
                     if edited_df.iloc[i]["paid"] != pix_cash.iloc[i]["paid"]:
                         target_id = int(edited_df.iloc[i]["id"])
                         run_query("UPDATE expenses SET paid = 1 WHERE id = ?", (target_id,))
-                        st.toast(f"Updated {edited_df.iloc[i]['Item']}!")
+                        st.toast(f"Verified: {edited_df.iloc[i]['Item']}")
                         st.rerun()
             else:
-                st.success("Manual payments clear! ✅")
+                st.success("No outstanding manual payments. ✅")
     else:
-        st.success("✅ No pending obligations found in the database.")
+        # Professional English: "Obligations Cleared"
+        st.success("🛡️ **System Status:** All financial obligations have been successfully settled.")
+
+    st.divider()
 
     # --- TIER 3: SIDE-BY-SIDE LEAKS & BUDGETS ---
     col_leaks, col_budgets = st.columns([1.2, 1])
 
     with col_leaks:
-        st.markdown("##### 💸 Top 5 Leaks")
+        # Native English: "Drivers" implies items that move the needle on your finances
+        st.markdown("##### 💸 Top Outflow Drivers")
+
         if not m_exp.empty:
-            top_leaks = m_exp.nlargest(5, "Price")[["Item", "Price", "Category"]]
-            st.dataframe(top_leaks, column_config={"Price": st.column_config.NumberColumn(format="R$ %.2f")},
-                         hide_index=True, use_container_width=True)
+            # 1. DATA PREP: Get the top 5 and calculate their impact
+            top_leaks = m_exp.nlargest(5, "Price").copy()
+            max_val = top_leaks["Price"].max() if not top_leaks.empty else 1.0
+
+            # 2. UI RENDERING: Use a Data Editor for a more professional, read-only feel
+            st.data_editor(
+                top_leaks[["Item", "Price", "Category"]],
+                hide_index=True,
+                use_container_width=True,
+                disabled=True,  # Security Engineer Tip: Keep display data read-only
+                column_config={
+                    "Item": st.column_config.TextColumn("Description"),
+                    "Price": st.column_config.ProgressColumn(
+                        "Impact",
+                        help="Visual weight relative to your highest expense",
+                        format="R$ %.2f",
+                        min_value=0,
+                        max_value=max_val,
+                    ),
+                    "Category": st.column_config.TextColumn("Tag")
+                }
+            )
+        else:
+            st.info("No outflow detected for the current period.")
 
     with col_budgets:
         st.markdown("##### 🎯 Budget Progress")
-        if not df_budgets.empty:
+
+        # REFRESH: Pull fresh budget data inside the UI block to ensure it's current
+        current_budgets = load_data("budgets")
+
+        # --- DEFENSIVE DATA PREP ---
+        # 1. Verify if m_exp exists and has the necessary columns to avoid KeyError
+        if not m_exp.empty and "Category" in m_exp.columns and "Price" in m_exp.columns:
             curr_spent = m_exp.groupby("Category")["Price"].sum().reset_index()
-            for _, b_row in df_budgets.iterrows():
-                spent = curr_spent[curr_spent["Category"] == b_row["category"]][
-                    "Price"].sum() if not curr_spent.empty else 0.0
-                pct = min(spent / b_row["amount"], 1.0) if b_row["amount"] > 0 else 0
-                st.markdown(f"<small>{b_row['category']} (R$ {spent:,.0f} / R$ {b_row['amount']:,.0f})</small>",
-                            unsafe_allow_html=True)
+            curr_spent["Category"] = curr_spent["Category"].astype(str).str.strip()
+        else:
+            # Fallback: Create an empty dataframe with correct headers if no data is found
+            curr_spent = pd.DataFrame(columns=["Category", "Price"])
+
+        if not current_budgets.empty:
+            for _, b_row in current_budgets.iterrows():
+                # Standardize names to ensure matching (stripping whitespace)
+                cat_name = str(b_row["category"]).strip()
+
+                # Match current category from budget row to the spending dataframe
+                spent = curr_spent[curr_spent["Category"] == cat_name]["Price"].sum() if not curr_spent.empty else 0.0
+
+                # 2. Logic Check: Prevent division by zero if budget is 0
+                limit = b_row["amount"]
+                pct = min(spent / limit, 1.0) if limit > 0 else 0.0
+
+                # --- UI RENDERING ---
+                # Professional Formatting: Red if over-budget, Blue if healthy
+                color = "#ef4444" if pct >= 1.0 else "#3b82f6"
+
+                st.markdown(f"""
+                    <div style="margin-bottom: 5px;">
+                        <small style="color: #94a3b8;">{cat_name}</small>
+                        <small style="float: right; color: {color}; font-weight: bold;">
+                            R$ {spent:,.0f} / R$ {limit:,.0f}
+                        </small>
+                    </div>
+                """, unsafe_allow_html=True)
                 st.progress(pct)
+        else:
+            st.info("No budgets defined. Head to 'Set Budgets' to begin.")
 
 
     # --- TIER 4: INTELLIGENCE HUB ---
@@ -415,7 +649,7 @@ if page == "📊 Dashboard":
         if col_notif2.button("📧 Dispatch Monthly Report"):
             if user_email:
                 report_body = generate_monthly_summary_text()
-                if send_financial_report(user_email, "Financial Summary", report_body):
+                if db_utils.send_financial_report(user_email, "Financial Summary", report_body):
                     st.success("Report dispatched!")
 # ==============================================================================
 # PAGE: INVESTMENTS
@@ -689,15 +923,30 @@ elif page == "💰 Incomes":
 # ==============================================================================
 elif page == "🎯 Set Budgets":
     st.markdown("## 🎯 Financial Guardrails")
+
+    # Fetch latest to show current values in the input boxes
+    latest_budgets = load_data("budgets")
+
     with st.form("budget_form"):
+        # English Student Tip: Use "Thresholds" or "Allocations" for a native feel
+        st.markdown("### Monthly Thresholds")
+
+        # Get categories from your CATEGORIES table to stay synchronized
+        # This prevents setting a budget for a category that doesn't exist
         cats = ["Food", "Transport", "Housing", "Fun", "Investments"]
         new_b = {}
+
         for c in cats:
-            existing = df_budgets[df_budgets['category'] == c]['amount'].values
-            new_b[c] = st.number_input(f"Limit for {c}", value=float(existing[0]) if len(existing) > 0 else 0.0)
-        if st.form_submit_button("Update Budgets"):
-            for c, a in new_b.items(): run_query("INSERT OR REPLACE INTO budgets (category, amount) VALUES (?, ?)",
-                                                 (c, a)); st.rerun()
+            existing = latest_budgets[latest_budgets['category'] == c]['amount'].values
+            new_b[c] = st.number_input(f"Monthly Limit: {c}",
+                                       value=float(existing[0]) if len(existing) > 0 else 0.0,
+                                       step=50.0)
+
+        if st.form_submit_button("Update System Guardrails"):
+            for c, a in new_b.items():
+                run_query("INSERT OR REPLACE INTO budgets (category, amount) VALUES (?, ?)", (c, a))
+            st.success("Guardrails updated successfully!")
+            st.rerun()
 # ==============================================================================
 # PAGE: MANAGE CARDS
 # ==============================================================================
@@ -743,7 +992,6 @@ elif page == "💳 Manage Cards":
 elif page == "🔄 Recurring":
     st.markdown("## 🔄 Manage Fixed Expenses")
 
-    # THE FORM (Missing in previous snippet)
     with st.form("recurring_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         item_name = c1.text_input("Service/Item (e.g. Netflix, Rent)")
@@ -755,7 +1003,6 @@ elif page == "🔄 Recurring":
 
         if st.form_submit_button("Add Subscription"):
             if item_name and price > 0:
-                # We insert with active=1 by default
                 run_query(
                     "INSERT INTO recurring (item, category, price, payment_method, day_of_month, active) VALUES (?, ?, ?, 'Pix', ?, 1)",
                     (item_name, category, price, int(day)))
@@ -765,19 +1012,28 @@ elif page == "🔄 Recurring":
     st.divider()
     df_rec = load_data("recurring")
     if not df_rec.empty:
-        col_view, col_status = st.columns([3, 1])
+        col_view, col_status = st.columns([3, 1.2])
         with col_view:
             st.dataframe(df_rec, use_container_width=True, hide_index=True)
         with col_status:
-            st.markdown("⚙️ **Subscription Status**")
+            st.markdown("⚙️ **Lifecycle Management**")
             options = (df_rec["id"].astype(str) + " - " + df_rec["item"]).tolist()
             target = st.selectbox("Select Service", options, key="status_rec_ui")
+            target_id = target.split(" - ")[0]
 
-            if st.button("Activate/Resume"):
-                run_query("UPDATE recurring SET active = 1 WHERE id = ?", (target.split(" - ")[0],))
+            c1, c2 = st.columns(2)
+            if c1.button("▶️ Resume"):
+                run_query("UPDATE recurring SET active = 1 WHERE id = ?", (target_id,))
                 st.rerun()
-            if st.button("Inactivate/Pause"):
-                run_query("UPDATE recurring SET active = 0 WHERE id = ?", (target.split(" - ")[0],))
+            if c2.button("⏸️ Pause"):
+                run_query("UPDATE recurring SET active = 0 WHERE id = ?", (target_id,))
+                st.rerun()
+
+            # --- NEW DELETE OPTION ---
+            st.markdown("---")
+            if st.button("🗑️ Delete Permanently", use_container_width=True):
+                run_query("DELETE FROM recurring WHERE id = ?", (target_id,))
+                st.warning(f"Subscription removed from system.")
                 st.rerun()
 
 # ==============================================================================
@@ -906,3 +1162,324 @@ if page == "📈 Wealth Command":
     with m3:
         milestone_box("Coast FIRE", fire_number * 0.75, total_invested)
         milestone_box("FULL FREEDOM", fire_number, total_invested)
+
+# ==============================================================================
+# PAGE: ENGLISH TRAINING
+# ==============================================================================
+elif page == "English Training":
+    # 1. DATABASE & SCHEMA SELF-HEALING (Consolidated Infrastructure)
+    run_query('''CREATE TABLE IF NOT EXISTS vocabulary
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     word
+                     TEXT,
+                     sentence
+                     TEXT,
+                     date
+                     TEXT
+                 )''')
+    run_query('''CREATE TABLE IF NOT EXISTS habit_list
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     habit_name
+                     TEXT
+                 )''')
+    run_query('''CREATE TABLE IF NOT EXISTS daily_habits
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     habit_name
+                     TEXT,
+                     date
+                     TEXT,
+                     completed
+                     INTEGER
+                 )''')
+
+    # Security Patch: Ensure Context Column exists
+    try:
+        run_query("SELECT sentence FROM vocabulary LIMIT 1")
+    except:
+        run_query("ALTER TABLE vocabulary ADD COLUMN sentence TEXT")
+        st.rerun()
+
+    st.markdown("<h1>🇺🇸 English Proficiency Hub</h1>", unsafe_allow_html=True)
+    today_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+
+    col_rituals, col_vocab = st.columns([1, 1.3])
+
+    # --- LEFT: DAILY RITUALS (Consistency Engine) ---
+    with col_rituals:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### ✍️ Daily Rituals")
+
+        # Fetch Master List and Today's Progress
+        res_master = run_query("SELECT id, habit_name FROM habit_list")
+        master_habits = res_master if res_master is not None and not res_master.empty else pd.DataFrame()
+
+        res_done = run_query("SELECT habit_name FROM daily_habits WHERE date = ?", (today_date,))
+        done_today = res_done["habit_name"].tolist() if res_done is not None and not res_done.empty else []
+
+        if not master_habits.empty:
+            for _, h_row in master_habits.iterrows():
+                h_name = h_row['habit_name']
+                h_id = h_row['id']
+                is_done = h_name in done_today
+
+                # Layout for Ritual Row
+                r_col1, r_col2 = st.columns([5, 1])
+
+                # Checkbox for Completion
+                if r_col1.checkbox(h_name, value=is_done, key=f"rit_{h_id}_{today_date}"):
+                    if not is_done:
+                        run_query("INSERT INTO daily_habits (habit_name, date, completed) VALUES (?, ?, 1)",
+                                  (h_name, today_date))
+                        st.rerun()
+                elif is_done:
+                    run_query("DELETE FROM daily_habits WHERE habit_name = ? AND date = ?", (h_name, today_date))
+                    st.rerun()
+        else:
+            st.info("No rituals defined. Provision your training plan below.")
+
+        st.markdown("---")
+
+        # --- THE MANAGEMENT ZONE (Fixes the delete issue) ---
+        with st.expander("⚙️ System Housekeeping (Manage Rituals)"):
+            # ADD NEW
+            new_h = st.text_input("New Ritual Name", placeholder="e.g. Read 5 pages")
+            if st.button("Add to Master List", use_container_width=True):
+                if new_h:
+                    run_query("INSERT INTO habit_list (habit_name) VALUES (?)", (new_h.strip(),))
+                    st.rerun()
+
+            st.divider()
+
+            # DELETE EXISTING
+            if not master_habits.empty:
+                st.caption("⚠️ Destructive Action: Remove Habit Forever")
+                target_to_del = st.selectbox("Select Habit to Purge", master_habits['habit_name'].tolist())
+                if st.button("🗑️ Purge Habit from System", use_container_width=True):
+                    # Delete from Master List
+                    run_query("DELETE FROM habit_list WHERE habit_name = ?", (target_to_del,))
+                    # Also delete historical logs to keep DB clean (Referential Integrity)
+                    run_query("DELETE FROM daily_habits WHERE habit_name = ?", (target_to_del,))
+                    st.warning(f"Habit '{target_to_del}' has been decommissioned.")
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- RIGHT: EXPRESSION CAPTURE (The Lexicon) ---
+    with col_vocab:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### 📓 Expression Capture")
+
+        with st.container():
+            c1, c2 = st.columns([1, 2])
+            word_input = c1.text_input("New Term", key="vocab_term", placeholder="Slang / Idiom")
+            sent_input = c2.text_input("Usage Context", key="vocab_sent", placeholder="Usage context...")
+
+            if st.button("💾 Commit to Memory", use_container_width=True):
+                if word_input:
+                    run_query("INSERT INTO vocabulary (word, sentence, date) VALUES (?, ?, ?)",
+                              (word_input.strip(), sent_input.strip(), today_date))
+                    st.toast(f"Logged: {word_input}")
+                    st.rerun()
+
+        st.markdown("---")
+
+        # Display acquisitions
+        df_vocab = run_query("SELECT id, word, sentence FROM vocabulary ORDER BY id DESC LIMIT 6")
+
+        if df_vocab is not None and not df_vocab.empty:
+            st.markdown("#### 📜 Recent Acquisitions")
+            for _, row in df_vocab.iterrows():
+                context = row['sentence'] if row['sentence'] else "No context recorded."
+                st.markdown(f"""
+                    <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 3px solid #58a6ff;">
+                        <strong style="color: #58a6ff;">{row['word']}</strong><br>
+                        <small style="color: #8B949E; font-style: italic;">{context}</small>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            # --- NEW DELETE LOGIC FOR VOCAB ---
+            with st.expander("🗑️ Delete Expressions"):
+                vocab_options = (df_vocab["id"].astype(str) + " - " + df_vocab["word"]).tolist()
+                to_delete = st.selectbox("Select term to purge", vocab_options)
+                if st.button("Purge from Lexicon"):
+                    run_query("DELETE FROM vocabulary WHERE id = ?", (to_delete.split(" - ")[0],))
+                    st.success("Word removed.")
+                    st.rerun()
+        else:
+            st.caption("The lexicon is currently empty.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ==============================================================================
+# PAGE: PROJECT MANAGEMENT
+# ==============================================================================
+elif page == "Project Management":
+    # 1. DATABASE & SCHEMA SELF-HEALING (Infrastructure Provisioning)
+    run_query('''CREATE TABLE IF NOT EXISTS dev_tasks
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     task_name
+                     TEXT,
+                     status
+                     TEXT,
+                     priority
+                     TEXT,
+                     completed
+                     INTEGER
+                 )''')
+
+    # Security Provisioning: Verify Priority Column
+    try:
+        run_query("SELECT priority FROM dev_tasks LIMIT 1")
+    except:
+        run_query("ALTER TABLE dev_tasks ADD COLUMN priority TEXT DEFAULT 'Medium'")
+        st.rerun()
+
+    st.markdown("<h1>💻 Security & Dev Portfolio</h1>", unsafe_allow_html=True)
+
+    # 2. DATA INGESTION
+    res = run_query("SELECT * FROM dev_tasks")
+    df_tasks = res if res is not None and not res.empty else pd.DataFrame(
+        columns=['id', 'task_name', 'status', 'priority', 'completed'])
+
+    # 3. OPERATIONAL METRICS (Health Monitoring)
+    sprint_tasks = df_tasks[df_tasks['status'] == 'Sprint'].copy()
+    progress = sprint_tasks['completed'].mean() if not sprint_tasks.empty else 0
+
+    st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+    st.markdown(f"### 🛡️ Remediation Velocity ({progress:.0%})")
+    # Custom colored progress bar based on completion
+    st.progress(progress)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 4. LIFECYCLE TABS
+    tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Sprint", "📂 Triage Queue", "🛠️ Provisioning", "📜 Audit Trail"])
+
+    with tab1:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### 🏃 Execution Phase")
+
+        if not sprint_tasks.empty:
+            for _, row in sprint_tasks.iterrows():
+                # Severity-based visual markers
+                p_map = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
+                icon = p_map.get(row['priority'], "⚪")
+
+                is_checked = bool(row['completed'])
+                if st.checkbox(f"{icon} {row['task_name']}", value=is_checked, key=f"sprint_{row['id']}"):
+                    if not is_checked:
+                        run_query("UPDATE dev_tasks SET completed = 1 WHERE id = ?", (row['id'],))
+                        st.rerun()
+                elif is_checked:
+                    run_query("UPDATE dev_tasks SET completed = 0 WHERE id = ?", (row['id'],))
+                    st.rerun()
+
+            st.divider()
+
+            # INTEGRATED CLOSEOUT (Operation Cleanup)
+            st.markdown("### 🧹 Quick Closeout")
+            c_sel, c_arch, c_del = st.columns([2, 1, 1])
+
+            target_list = sprint_tasks['task_name'].tolist()
+            if target_list:
+                target_name = c_sel.selectbox("Select Task to Finalize:", target_list, key="q_close")
+                target_id = sprint_tasks[sprint_tasks['task_name'] == target_name]['id'].values[0]
+
+                if c_arch.button("✅ Archive", use_container_width=True):
+                    run_query("UPDATE dev_tasks SET status = 'Archived', completed = 1 WHERE id = ?", (int(target_id),))
+                    st.toast(f"Requirement {target_id} moved to history.")
+                    st.rerun()
+
+                if c_del.button("🗑️ Purge", use_container_width=True):
+                    run_query("DELETE FROM dev_tasks WHERE id = ?", (int(target_id),))
+                    st.warning(f"Record {target_id} purged from system.")
+                    st.rerun()
+        else:
+            st.info("No active tickets in the current sprint. Pipeline idle.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab2:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### 🔍 Risk Triage (Backlog)")
+        backlog_items = df_tasks[df_tasks['status'] == 'Backlog'].copy()
+
+        if not backlog_items.empty:
+            for _, row in backlog_items.iterrows():
+                col_item, col_btn = st.columns([3, 1])
+                color = "🔴" if row['priority'] == "High" else "⚪"
+                col_item.markdown(f"{color} **{row['task_name']}**")
+
+                if col_btn.button("Promote to Sprint", key=f"prom_{row['id']}", use_container_width=True):
+                    run_query("UPDATE dev_tasks SET status = 'Sprint' WHERE id = ?", (row['id'],))
+                    st.rerun()
+        else:
+            st.success("Triage complete. No pending risks found.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab3:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### 🛠️ Provision New Requirement")
+        with st.form("new_req_form", clear_on_submit=True):
+            col_a, col_b = st.columns([2, 1])
+            name = col_a.text_input("Operational Requirement", placeholder="e.g., Audit firewall logs")
+            priority = col_b.selectbox("Severity Level", ["Low", "Medium", "High"], index=1)
+            stage = st.selectbox("Deployment Pipeline", ["Backlog", "Sprint"])
+
+            if st.form_submit_button("Deploy to System"):
+                if name:
+                    run_query("INSERT INTO dev_tasks (task_name, status, priority, completed) VALUES (?, ?, ?, 0)",
+                              (name.strip(), stage, priority))
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab4:
+        st.markdown('<div class="fintech-card">', unsafe_allow_html=True)
+        st.markdown("### 📜 Historical Audit Trail")
+        archived_tasks = df_tasks[df_tasks['status'] == 'Archived'].copy()
+
+        if not archived_tasks.empty:
+            st.dataframe(archived_tasks[['task_name', 'priority', 'completed']],
+                         column_config={
+                             "task_name": "Resolved Task",
+                             "priority": "Severity",
+                             "completed": st.column_config.CheckboxColumn("Validated")
+                         },
+                         hide_index=True, use_container_width=True)
+
+            if st.button("Purge Audit History", help="Destructive action: removes all archived records"):
+                run_query("DELETE FROM dev_tasks WHERE status = 'Archived'")
+                st.rerun()
+        else:
+            st.caption("Audit trail empty. No historical data.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+
+
+# --- SYSTEM AUDIT TOOL ---
+with st.sidebar.expander("🛡️ System Integrity Audit"):
+    tables = ["expenses", "incomes", "budgets", "vocabulary", "dev_tasks"]
+    for t in tables:
+        try:
+            count = run_query(f"SELECT COUNT(*) as cnt FROM {t}")
+            st.write(f"✅ Table '{t}': {count['cnt'][0]} records found.")
+        except Exception as e:
+            st.error(f"❌ Table '{t}' is corrupted or missing columns: {e}")
