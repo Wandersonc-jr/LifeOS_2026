@@ -45,6 +45,11 @@ def load_data_with_id(table_name):
 # --- 2. OPERATIONAL LOGIC ---
 
 def generate_installments(date, item, price, category, payment_method, installments):
+    """
+    Advanced Credit Card Logic:
+    - cycle_shift: If purchase is after closing day, it moves to the next bill.
+    - due_month_offset: If due_day < closing_day (e.g., Closes 28, Due 7), it adds a month.
+    """
     new_rows = []
     cards_df = load_data("cards")
     card_rule = cards_df[cards_df["card_name"] == payment_method]
@@ -54,7 +59,13 @@ def generate_installments(date, item, price, category, payment_method, installme
         if is_credit_card:
             closing_day = int(card_rule.iloc[0]["closing_day"])
             due_day = int(card_rule.iloc[0]["due_day"])
-            months_to_add = i + (1 if date.day > closing_day else 0)
+
+            # If today is after closing, move cycle forward
+            cycle_shift = 1 if date.day > closing_day else 0
+            # If due date is numerically before closing date, it's paid in the following month
+            due_month_offset = 1 if due_day < closing_day else 0
+
+            months_to_add = i + cycle_shift + due_month_offset
             row_date = (date + relativedelta(months=months_to_add)).replace(day=due_day)
         else:
             row_date = date + relativedelta(months=i)
@@ -88,31 +99,28 @@ def check_and_insert_recurring():
 
 # --- 3. REPORTING & AUTOMATION ENGINE ---
 
-def generate_monthly_summary_text():
-    """Advanced Executive Summary with deep dive metrics."""
+def generate_monthly_summary_text(df_inc_all, df_exp_all):
+    """
+    Generates the text for the email report.
+    Logic: Only counts RECEIVED income (paid=1) for Net Flow.
+    """
     today = pd.Timestamp.now()
     curr_month = today.strftime("%Y-%m")
 
-    inc = load_data_with_id("incomes")
-    exp = load_data_with_id("expenses")
+    m_inc = df_inc_all[
+        df_inc_all['Date'].dt.strftime("%Y-%m") == curr_month] if not df_inc_all.empty else pd.DataFrame()
+    m_exp = df_exp_all[
+        df_exp_all['Date'].dt.strftime("%Y-%m") == curr_month] if not df_exp_all.empty else pd.DataFrame()
 
-    m_inc = inc[pd.to_datetime(inc['Date']).dt.strftime("%Y-%m") == curr_month] if not inc.empty else pd.DataFrame()
-    m_exp = exp[pd.to_datetime(exp['Date']).dt.strftime("%Y-%m") == curr_month] if not exp.empty else pd.DataFrame()
+    # Calculate metrics based on SETTLED funds (Received Income)
+    total_in = 0
+    if not m_inc.empty:
+        # Handling different boolean types (1, True, "1")
+        total_in = m_inc[m_inc["paid"].isin([1, True, "1"])]['Price'].sum()
 
-    total_in = m_inc['Price'].sum() if not m_inc.empty else 0
     total_out = m_exp['Price'].sum() if not m_exp.empty else 0
     net = total_in - total_out
-    savings_rate = (net / total_in * 100) if total_in > 0 else 0
-
-    category_summary = ""
-    if not m_exp.empty:
-        cat_totals = m_exp.groupby("Category")["Price"].sum().sort_values(ascending=False)
-        category_summary = "\n📊 TOP SPENDING CATEGORIES:\n"
-        for cat, amt in cat_totals.items():
-            category_summary += f"   - {cat}: R$ {amt:,.2f}\n"
-
-    fiscal_status = "STABLE" if net >= 0 else "DEFICIT"
-    mood_icon = "🟢" if net >= 0 else "🔴"
+    status = "STABLE 🟢" if net >= 0 else "DEFICIT 🔴"
 
     return f"""
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -121,19 +129,15 @@ def generate_monthly_summary_text():
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     💰 FINANCIAL OVERVIEW:
-       • Gross Inflow:    R$ {total_in:,.2f}
-       • Gross Outflow:   R$ {total_out:,.2f}
-       • Net Cash Flow:   R$ {net:,.2f}
-       • Savings Rate:    {savings_rate:.1f}%
+       • Received Income: R$ {total_in:,.2f}
+       • Total Expenses:  R$ {total_out:,.2f}
+       • Current Net:     R$ {net:,.2f}
 
-    {category_summary}
+    ⚖️ FISCAL STATUS: {status}
 
-    ⚖️ FISCAL HEALTH ASSESSMENT:
-       Status: {mood_icon} {fiscal_status}
-       {"Great job! You are living within your means." if net >= 0 else "Warning: Outflow exceeds inflow. Review your variable costs."}
-
+    {"⚠️ Note: You have pending receivables not yet included in the cash total." if not m_inc.empty and (m_inc["paid"].isin([0, False, "0"])).any() else ""}
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    Sent via LifeOS Automated Dispatch | {today.strftime("%d/%m/%Y %H:%M")}
+    Sent via LifeOS Automated Dispatch | {today.strftime("%d/%m/%Y")}
     """
 
 
@@ -143,11 +147,8 @@ def send_financial_report(recipient_email, subject, body):
         sender_email = st.secrets["email"]["sender_email"]
         app_password = st.secrets["email"]["app_password"]
     except Exception:
-        st.error("Credential Retrieval Failed: Check .streamlit/secrets.toml")
+        # Failure to find secrets should not crash the app
         return False
-
-    if "your-email" in sender_email or "xxxx" in app_password:
-        return False  # Silent return for auto-dispatch
 
     msg = MIMEMultipart()
     msg['From'] = sender_email
@@ -161,27 +162,19 @@ def send_financial_report(recipient_email, subject, body):
             server.login(sender_email, app_password)
             server.send_message(msg)
         return True
-    except Exception as e:
-        st.error(f"Mail Dispatch Failed: {e}")
+    except Exception:
         return False
 
 
-def auto_dispatch_monthly_report(recipient_email):
-    """
-    Checks the log for current month. Sends report if missing.
-    """
-    # 1. Ensure log table exists
+def auto_dispatch_monthly_report(recipient_email, df_inc_all, df_exp_all):
+    """Automated check and send logic."""
     run_query("CREATE TABLE IF NOT EXISTS report_logs (id INTEGER PRIMARY KEY, month_year TEXT UNIQUE, sent_at TEXT)")
-
     curr_month = pd.Timestamp.now().strftime("%Y-%m")
-
-    # 2. Check the log
     check = run_query("SELECT * FROM report_logs WHERE month_year = ?", (curr_month,))
 
     if check is None or check.empty:
-        report_body = generate_monthly_summary_text()
+        report_body = generate_monthly_summary_text(df_inc_all, df_exp_all)
         success = send_financial_report(recipient_email, f"LifeOS Auto-Report: {curr_month}", report_body)
-
         if success:
             run_query("INSERT INTO report_logs (month_year, sent_at) VALUES (?, ?)",
                       (curr_month, pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")))
