@@ -378,36 +378,24 @@ if page == "📊 Dashboard":
     # --- 1. DATA PREP (Unified Pipeline) ---
     today = pd.Timestamp.now()
     curr_month_str = today.strftime("%Y-%m")
-    # Reference point for "Creation Date" logic: First day of the current month
     view_month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     # Standardize dates for the whole session
     for df in [df_exp_all, df_inc_all]:
         if not df.empty:
             df["Date"] = pd.to_datetime(df["Date"])
+            # Ensure numeric 'paid' status (0 or 1)
+            if 'paid' in df.columns:
+                df["paid"] = pd.to_numeric(df["paid"], errors='coerce').fillna(0).astype(int)
 
     # --- 🟢 RECURRING LOGIC (Historical & Birth-Date Integrity) 🟢 ---
     df_rec_simulated = pd.DataFrame()
-    rec_val = 0.0
-
     if not df_rec.empty:
-        # Self-healing: Ensure created_at exists and is datetime
         df_rec['created_at'] = pd.to_datetime(df_rec['created_at'].fillna("2024-01-01"))
-
-        # FILTER: Must be ACTIVE AND created BEFORE OR IN the current viewing month
-        # This prevents future subscriptions from appearing in past months
-        mask_active_and_born = (
-                (df_rec['active'] == 1) &
-                (df_rec['created_at'] <= view_month_start)
-        )
-
+        mask_active_and_born = (df_rec['active'] == 1) & (df_rec['created_at'] <= view_month_start)
         active_rec_filtered = df_rec[mask_active_and_born].copy()
 
         if not active_rec_filtered.empty:
-            # 1. Sum for the Metric Cards
-            rec_val = active_rec_filtered['price'].sum()
-
-            # 2. Build Simulated DataFrame for Charts
             df_rec_simulated = pd.DataFrame({
                 'Item': active_rec_filtered['item'],
                 'Category': active_rec_filtered['category'],
@@ -416,30 +404,36 @@ if page == "📊 Dashboard":
                 'paid': [0] * len(active_rec_filtered)
             })
 
-    # Current Month Calculations (Logged Expenses)
-    m_exp_raw = df_exp_all[df_exp_all["Date"].dt.strftime("%Y-%m") == curr_month_str].copy()
-
-    # Unified Monthly Expenses (Logged + Valid Recurring)
-    m_exp = pd.concat([m_exp_raw, df_rec_simulated], ignore_index=True) if not df_rec_simulated.empty else m_exp_raw
-
+    # --- 🔵 MONTHLY CALCULATIONS (The Operational Plan) 🔵 ---
+    # Logged Incomes this month (March Target)
     m_inc = df_inc_all[
         df_inc_all["Date"].dt.strftime("%Y-%m") == curr_month_str] if not df_inc_all.empty else pd.DataFrame()
-
     income_val = m_inc["Price"].sum() if not m_inc.empty else 0.0
 
-    # expense_val now accurately ignores future subscriptions when viewing past data
+    # Logged Expenses this month (March Commitment)
+    m_exp_raw = df_exp_all[df_exp_all["Date"].dt.strftime("%Y-%m") == curr_month_str].copy()
+    m_exp = pd.concat([m_exp_raw, df_rec_simulated], ignore_index=True) if not df_rec_simulated.empty else m_exp_raw
     expense_val = m_exp["Price"].sum()
 
-    paid_mtd = m_exp_raw[m_exp_raw["paid"].isin([1, True, "1"])]["Price"].sum() if not m_exp_raw.empty else 0.0
+    # --- 🏛️ STRATEGIC TOTALS (The Actual Cash Reality) ---
+    # Total Cash = ALL Received Incomes (Jan + Feb + Mar...) - ALL Paid Expenses
+    total_received_all = df_inc_all[df_inc_all["paid"] == 1]["Price"].sum() if not df_inc_all.empty else 0.0
+    total_paid_exp_all = df_exp_all[df_exp_all["paid"] == 1]["Price"].sum() if not df_exp_all.empty else 0.0
 
-    # Terminology Refinement
-    disposable_income = income_val - paid_mtd
+    # This is your real bank balance. It updates when you mark ANY row (January or March) as paid.
+    total_cash = total_received_all - total_paid_exp_all
+
+    # --- 📊 OPERATIONAL METRICS ---
+    # Settled MTD: Only expenses dated this month that you have actually paid
+    paid_mtd = m_exp_raw[m_exp_raw["paid"] == 1]["Price"].sum() if not m_exp_raw.empty else 0.0
+
+    # DISPOSABLE: Your total cash currently in the bank
+    # This reflects your REAL spending power at this exact second.
+    disposable_income = total_cash
+
+    # Burn Rate (Based on total commitments vs total expected income)
     burn_rate = (expense_val / income_val * 100) if income_val > 0 else 0.0
 
-    # Strategic Totals
-    total_inc_all = df_inc_all["Price"].sum() if not df_inc_all.empty else 0.0
-    total_exp_all = df_exp_all["Price"].sum() if not df_exp_all.empty else 0.0
-    total_cash = total_inc_all - total_exp_all
     total_invested = df_inv["Amount"].sum() if not df_inv.empty else 0.0
     net_worth = total_cash + total_invested
 
@@ -447,7 +441,7 @@ if page == "📊 Dashboard":
     st.markdown("## 🏛️ Strategic Capital")
     c1, c2, c3 = st.columns(3)
     with c1:
-        metric_card("Liquid Assets", total_cash, "rgba(59, 130, 246, 0.1)", "#3b82f6", "Account Liquidity")
+        metric_card("Liquid Assets", total_cash, "rgba(59, 130, 246, 0.1)", "#3b82f6", "Real Bank Balance")
     with c2:
         metric_card("Invested Capital", total_invested, "rgba(139, 92, 246, 0.1)", "#8b5cf6", "Yield Assets")
     with c3:
@@ -459,16 +453,19 @@ if page == "📊 Dashboard":
     st.markdown("### 📊 Operational Velocity")
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        metric_card("Gross Inflow", income_val, "rgba(16, 185, 129, 0.05)", "#10b981", "Total Revenue")
+        # Expected income for the current month only
+        metric_card("Gross Inflow", income_val, "rgba(16, 185, 129, 0.05)", "#10b981",
+                    f"Plan for {today.strftime('%b')}")
     with m2:
         metric_card("Gross Outflow", expense_val, "rgba(239, 68, 68, 0.05)", "#ef4444", f"Burn: {burn_rate:.1f}%")
     with m3:
-        metric_card("Cleared Debts", paid_mtd, "rgba(245, 158, 11, 0.05)", "#f59e0b", "Settled MTD")
+        # Expenses dated this month that are settled
+        metric_card("Cleared Debts", paid_mtd, "rgba(245, 158, 11, 0.05)", "#f59e0b", "Actually Paid (MTD)")
     with m4:
-        metric_card("Disposable", disposable_income, "rgba(59, 130, 246, 0.05)", "#3b82f6", "Unallocated")
+        # This now reacts to the January payment you marked!
+        metric_card("Disposable", disposable_income, "rgba(59, 130, 246, 0.05)", "#3b82f6", "Cash-in-Hand")
 
     # --- ZONE 3: BUDGET VS ACTUAL ---
-    #
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 🎯 Budget Guardrails")
     if not df_budgets.empty:
@@ -499,30 +496,39 @@ if page == "📊 Dashboard":
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 💳 Liability & Settlement Pipeline")
 
-    today_cutoff = today.strftime("%Y-%m")
+    # 1. DEFINE PRECISES MONTHLY BOUNDARIES
+    start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end_of_month = (start_of_month + relativedelta(months=1)) - relativedelta(seconds=1)
+
     if not df_exp_all.empty:
-        mask_pending = (df_exp_all["paid"].isin([0, False, "0"]) &
-                        (df_exp_all["Date"].dt.strftime("%Y-%m") <= today_cutoff))
-        unpaid_current = df_exp_all[mask_pending].copy()
+        # DATA PIPELINE: Force clean types for the filter
+        df_pipe = df_exp_all.copy()
+        df_pipe["Date"] = pd.to_datetime(df_pipe["Date"])
+
+        # CRITICAL: Force 'paid' to numeric. 0 = Unpaid, 1 = Paid.
+        # This ensures "Horti Frutti" and "Financing" items aren't skipped by mistake
+        df_pipe["paid"] = pd.to_numeric(df_pipe["paid"], errors='coerce').fillna(0).astype(int)
+
+        # FILTER: Unpaid AND strictly within this month
+        mask_pending = (
+                (df_pipe["paid"] == 0) &
+                (df_pipe["Date"] >= start_of_month) &
+                (df_pipe["Date"] <= end_of_month)
+        )
+        unpaid_current = df_pipe[mask_pending].copy()
     else:
         unpaid_current = pd.DataFrame()
 
-    # Filter Recurring for the Settlement Pipeline using the same Birth-Date Logic
+    # 2. FILTER RECURRING
     active_recurring_settle = pd.DataFrame()
     if not df_rec.empty:
         active_recurring_settle = df_rec[
             (df_rec['active'] == 1) &
-            (pd.to_datetime(df_rec['created_at'].fillna("2024-01-01")) <= view_month_start)
+            (pd.to_datetime(df_rec['created_at'].fillna("2024-01-01")) <= start_of_month)
             ].copy()
 
+    # 3. RENDER TABS
     if not unpaid_current.empty or not active_recurring_settle.empty:
-        overdue = unpaid_current[
-            unpaid_current["Date"].dt.strftime("%Y-%m") < today_cutoff] if not unpaid_current.empty else pd.DataFrame()
-        if not overdue.empty:
-            st.error(f"🚨 **Critical Alert:** Found {len(overdue)} delinquent items.")
-        else:
-            st.info("ℹ️ **Status:** Operational obligations identified.")
-
         tab_cards, tab_tasks, tab_rec_pending = st.tabs([
             "💳 Institutional Debt (Cards)",
             "💸 Direct Settlements (Pix/Cash)",
@@ -530,46 +536,57 @@ if page == "📊 Dashboard":
         ])
 
         with tab_cards:
-            cards_only = unpaid_current[
-                ~unpaid_current["Payment Method"].isin(["Pix", "Cash"])] if not unpaid_current.empty else pd.DataFrame()
+            # Filter for Credit Cards (Everything NOT Pix/Cash)
+            cards_only = unpaid_current[~unpaid_current["Payment Method"].isin(["Pix", "Cash"])]
+
             if not cards_only.empty:
                 card_sums = cards_only.groupby("Payment Method")["Price"].sum().reset_index()
                 cols = st.columns(len(card_sums))
+
                 for i, row in card_sums.iterrows():
+                    bank_name = row['Payment Method']
                     with cols[i]:
                         st.markdown(f"""
-                            <div style="background: rgba(255, 75, 75, 0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(255, 75, 75, 0.2);">
-                                <p style="margin:0; font-size: 0.8rem; color: #94a3b8;">{row['Payment Method']}</p>
+                            <div style="background: rgba(255, 75, 75, 0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(255, 75, 75, 0.2); text-align: center;">
+                                <p style="margin:0; font-size: 0.8rem; color: #94a3b8;">{bank_name}</p>
                                 <h3 style="margin:0; color: #ff4b4b;">R$ {row['Price']:,.2f}</h3>
                             </div>
                         """, unsafe_allow_html=True)
-                        if st.button(f"Settle {row['Payment Method']}", key=f"btn_settle_{row['Payment Method']}",
+
+                        # DETAILS LIST: Now you will see all 20+ items here
+                        with st.expander(f"View {bank_name} items"):
+                            details = cards_only[cards_only["Payment Method"] == bank_name]
+                            st.dataframe(details[["Date", "Item", "Price"]], hide_index=True, use_container_width=True)
+
+                        if st.button(f"Settle {bank_name} Month", key=f"btn_settle_{bank_name}",
                                      use_container_width=True):
-                            run_query('UPDATE expenses SET paid = 1 WHERE "Payment Method" = ? AND paid = 0',
-                                      (row["Payment Method"],))
+                            target_ids = details["id"].tolist()
+                            placeholders = ','.join(['?'] * len(target_ids))
+                            run_query(f'UPDATE expenses SET paid = 1 WHERE id IN ({placeholders})', target_ids)
+                            st.toast(f"{bank_name} balance cleared!")
                             st.rerun()
             else:
-                st.success("All credit accounts are in good standing. ✅")
+                st.success("No card installments due this month. ✅")
 
         with tab_tasks:
-            pix_cash = unpaid_current[unpaid_current["Payment Method"].isin(
-                ["Pix", "Cash"])].copy() if not unpaid_current.empty else pd.DataFrame()
+            pix_cash = unpaid_current[unpaid_current["Payment Method"].isin(["Pix", "Cash"])].copy()
             if not pix_cash.empty:
-                pix_cash["Date"] = pix_cash["Date"].dt.date
                 edited_df = st.data_editor(
                     pix_cash[["id", "Date", "Category", "Item", "Price", "paid"]],
-                    hide_index=True, use_container_width=True, key="editor_global_pending",
-                    column_config={"id": None, "Date": st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
-                                   "Price": st.column_config.NumberColumn("Amount", format="R$ %.2f"),
-                                   "paid": st.column_config.CheckboxColumn("Settle?")},
+                    hide_index=True, use_container_width=True, key="editor_monthly_pix_final",
+                    column_config={
+                        "id": None,
+                        "Date": st.column_config.DateColumn("Due Date", format="DD/MM/YYYY"),
+                        "paid": st.column_config.CheckboxColumn("Settle?")
+                    },
                     disabled=["Date", "Category", "Item", "Price"]
                 )
                 for i in range(len(edited_df)):
-                    if edited_df.iloc[i]["paid"] != pix_cash.iloc[i]["paid"]:
+                    if edited_df.iloc[i]["paid"] == 1:
                         run_query("UPDATE expenses SET paid = 1 WHERE id = ?", (int(edited_df.iloc[i]["id"]),))
                         st.rerun()
             else:
-                st.success("No manual payments pending. ✅")
+                st.success("No manual payments pending for this month. ✅")
 
         with tab_rec_pending:
             if not active_recurring_settle.empty:
@@ -591,171 +608,132 @@ if page == "📊 Dashboard":
                             st.rerun()
                 else:
                     st.success("✨ All fixed subscriptions for this month settled.")
-            else:
-                st.info("No active recurring subscriptions for this month.")
 
-        # --- TIER 4: INTELLIGENCE HUB ---
-        st.divider()
-        st.markdown("### 🕵️‍♂️ Intelligence Hub")
-        with st.expander("🔍 Deep Data Analysis & Prediction", expanded=False):
-            date_range = st.date_input("Analysis Period",
-                                       value=(dt_class.today(), dt_class.today() + relativedelta(months=1)),
-                                       key="intel_hub_v6_final")
+    # --- TIER 4: INTELLIGENCE HUB ---
+    st.divider()
+    st.markdown("### 🕵️‍♂️ Intelligence Hub")
 
-            if len(date_range) == 2:
-                start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+    with st.expander("🔍 Deep Data Analysis & Prediction", expanded=False):
+        date_selection = st.date_input(
+            "Analysis Period",
+            value=(today.date(), (today + relativedelta(months=1)).date()),
+            key="intel_hub_v6_final"
+        )
 
-                # 1. BASE DATA PREP (Standard Expenses)
-                p_exp = df_exp_all.copy()
+        # CRITICAL FIX: Ensure start and end exist before running
+        if isinstance(date_selection, (list, tuple)) and len(date_selection) == 2:
+            start, end = pd.to_datetime(date_selection[0]), pd.to_datetime(date_selection[1])
+
+            p_exp = df_exp_all.copy() if not df_exp_all.empty else pd.DataFrame(columns=["Date", "Price", "Category", "Item", "Payment Method"])
+            if not p_exp.empty:
                 p_exp["Date"] = pd.to_datetime(p_exp["Date"])
-                p_exp = p_exp[(p_exp["Date"] >= start) & (p_exp["Date"] <= end)] if not p_exp.empty else pd.DataFrame()
+                p_exp = p_exp[(p_exp["Date"] >= start) & (p_exp["Date"] <= end)]
 
-                # --- RECURRING INJECTION (Time-Aware) ---
-                if not df_rec.empty:
-                    df_rec['created_at'] = pd.to_datetime(df_rec['created_at'].fillna("2024-01-01"))
-                    num_months = (end.year - start.year) * 12 + (end.month - start.month) + 1
-                    rec_rows = []
-                    for i in range(num_months):
-                        sim_month_date = start + relativedelta(months=i)
-                        if sim_month_date <= end:
-                            active_and_born = df_rec[(df_rec['active'] == 1) & (df_rec['created_at'] <= sim_month_date)]
-                            for _, r_item in active_and_born.iterrows():
-                                rec_rows.append({
-                                    'Date': sim_month_date,
-                                    'Category': r_item['category'],
-                                    'Item': f"🔄 {r_item['item']}",
-                                    'Price': r_item['price'],
-                                    'Payment Method': 'Recurring',
-                                    'paid': 0
-                                })
-                    if rec_rows:
-                        p_exp = pd.concat([p_exp, pd.DataFrame(rec_rows)], ignore_index=True)
+            # Simulation of Recurring for Future/Range
+            if not df_rec.empty:
+                df_rec['created_at'] = pd.to_datetime(df_rec['created_at'].fillna("2024-01-01"))
+                num_months = (end.year - start.year) * 12 + (end.month - start.month) + 1
+                rec_rows = []
+                for i in range(num_months):
+                    sim_month_date = start + relativedelta(months=i)
+                    if sim_month_date <= end:
+                        active_and_born = df_rec[(df_rec['active'] == 1) & (df_rec['created_at'] <= sim_month_date)]
+                        for _, r_item in active_and_born.iterrows():
+                            rec_rows.append({'Date': sim_month_date, 'Category': r_item['category'], 'Item': f"🔄 {r_item['item']}", 'Price': r_item['price'], 'Payment Method': 'Recurring', 'paid': 0})
+                if rec_rows:
+                    p_exp = pd.concat([p_exp, pd.DataFrame(rec_rows)], ignore_index=True)
 
-                # 2. INCOME DATA PREP
-                p_inc = df_inc_all.copy()
+            p_inc = df_inc_all.copy() if not df_inc_all.empty else pd.DataFrame(columns=["Date", "Price"])
+            if not p_inc.empty:
                 p_inc["Date"] = pd.to_datetime(p_inc["Date"])
-                p_inc = p_inc[(p_inc["Date"] >= start) & (p_inc["Date"] <= end)] if not p_inc.empty else pd.DataFrame()
+                p_inc = p_inc[(p_inc["Date"] >= start) & (p_inc["Date"] <= end)]
 
-                # 3. STRATEGIC CALCULATIONS
-                pred_inc = p_inc["Price"].sum() if not p_inc.empty else 0.0
-                pred_exp = p_exp["Price"].sum() if not p_exp.empty else 0.0
-                net_pred = pred_inc - pred_exp
-                status_color = "#10b981" if net_pred > 0 else "#ef4444"
+            pred_inc, pred_exp = p_inc["Price"].sum() if not p_inc.empty else 0.0, p_exp["Price"].sum() if not p_exp.empty else 0.0
+            net_pred = pred_inc - pred_exp
+            status_color = "#10b981" if net_pred > 0 else "#ef4444"
 
-                # --- FORECAST HERO ---
-                st.markdown(f"""
-                    <div style="background: rgba(255,255,255,0.02); padding: 20px; border-radius: 15px; border-left: 10px solid {status_color}; margin-bottom: 20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <p style="color: #8B949E; margin:0; font-size: 0.8rem; letter-spacing: 1px;">STRATEGIC FORECAST (INCL. RECURRING)</p>
-                                <h1 style="margin:0; color: white;">R$ {net_pred:,.2f}</h1>
-                            </div>
-                            <div style="text-align: right;">
-                                <p style="margin:0; font-size: 1.2rem; color: {status_color}; font-weight: bold;">{'SURPLUS' if net_pred > 0 else 'DEFICIT'}</p>
-                                <p style="margin:0; color: #8B949E; font-size: 0.8rem;">{start.strftime('%d %b')} — {end.strftime('%d %b')}</p>
-                            </div>
+            st.markdown(f"""
+                <div style="background: rgba(255,255,255,0.02); padding: 20px; border-radius: 15px; border-left: 10px solid {status_color}; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <p style="color: #8B949E; margin:0; font-size: 0.8rem; letter-spacing: 1px;">STRATEGIC FORECAST (INCL. RECURRING)</p>
+                            <h1 style="margin:0; color: white;">R$ {net_pred:,.2f}</h1>
+                        </div>
+                        <div style="text-align: right;">
+                            <p style="margin:0; font-size: 1.2rem; color: {status_color}; font-weight: bold;">{'SURPLUS' if net_pred > 0 else 'DEFICIT'}</p>
+                            <p style="margin:0; color: #8B949E; font-size: 0.8rem;">{start.strftime('%d %b')} — {end.strftime('%d %b')}</p>
                         </div>
                     </div>
-                """, unsafe_allow_html=True)
+                </div>
+            """, unsafe_allow_html=True)
 
-                # --- CHARTS ROW ---
-                col_left, col_right = st.columns([2, 1])
-                with col_left:
-                    st.markdown("##### 📊 Cash Flow Momentum")
-                    combined = pd.DataFrame()
-                    if not p_exp.empty:
-                        e = p_exp.groupby(p_exp["Date"].dt.to_period("M").astype(str))["Price"].sum().reset_index(
-                            name="Price")
-                        e["Type"] = "Expense"
-                        combined = pd.concat([combined, e])
-                    if not p_inc.empty:
-                        i = p_inc.groupby(p_inc["Date"].dt.to_period("M").astype(str))["Price"].sum().reset_index(
-                            name="Price")
-                        i["Type"] = "Income"
-                        combined = pd.concat([combined, i])
-                    if not combined.empty:
-                        fig_mom = px.bar(combined, x="Date", y="Price", color="Type", barmode="group",
-                                         template="plotly_dark", height=250,
-                                         color_discrete_map={"Income": "#10b981", "Expense": "#ef4444"})
-                        st.plotly_chart(fig_mom, use_container_width=True)
+            col_left, col_right = st.columns([2, 1])
+            with col_left:
+                st.markdown("##### 📊 Cash Flow Momentum")
+                combined_list = []
+                if not p_exp.empty:
+                    e = p_exp.groupby(p_exp["Date"].dt.to_period("M").astype(str))["Price"].sum().reset_index(name="Price")
+                    e["Type"] = "Expense"; combined_list.append(e)
+                if not p_inc.empty:
+                    i = p_inc.groupby(p_inc["Date"].dt.to_period("M").astype(str))["Price"].sum().reset_index(name="Price")
+                    i["Type"] = "Income"; combined_list.append(i)
+                if combined_list:
+                    fig_mom = px.bar(pd.concat(combined_list), x="Date", y="Price", color="Type", barmode="group", template="plotly_dark", height=250, color_discrete_map={"Income": "#10b981", "Expense": "#ef4444"})
+                    st.plotly_chart(fig_mom, use_container_width=True)
 
-                with col_right:
-                    st.markdown("##### 💳 Card Utilization")
+            with col_right:
+                st.markdown("##### 💳 Card Utilization")
+                if not p_exp.empty:
                     card_data_source = p_exp[p_exp['Payment Method'] != 'Recurring']
                     if not card_data_source.empty:
-                        card_data = card_data_source.groupby("Payment Method")["Price"].sum().reset_index().sort_values(
-                            "Price")
-                        st.plotly_chart(
-                            px.bar(card_data, y="Payment Method", x="Price", orientation='h', template="plotly_dark",
-                                   height=250, color_discrete_sequence=["#8b5cf6"]), use_container_width=True)
+                        card_data = card_data_source.groupby("Payment Method")["Price"].sum().reset_index().sort_values("Price")
+                        st.plotly_chart(px.bar(card_data, y="Payment Method", x="Price", orientation='h', template="plotly_dark", height=250, color_discrete_sequence=["#8b5cf6"]), use_container_width=True)
 
-                st.divider()
+            st.divider()
+            col_pie, col_leaks = st.columns([1, 2])
+            with col_pie:
+                st.markdown("##### 🍕 Category Mix")
+                if not p_exp.empty:
+                    st.plotly_chart(px.pie(p_exp, values="Price", names="Category", hole=0.6, template="plotly_dark", height=280), use_container_width=True)
 
-                # --- PIE & LEAKS ROW ---
-                col_pie, col_leaks = st.columns([1, 2])
-                with col_pie:
-                    st.markdown("##### 🍕 Category Mix")
-                    if not p_exp.empty:
-                        st.plotly_chart(
-                            px.pie(p_exp, values="Price", names="Category", hole=0.6, template="plotly_dark",
-                                   height=280), use_container_width=True)
+            with col_leaks:
+                st.markdown("##### 🕵️‍♂️ Top Spending Items")
+                if not p_exp.empty:
+                    leaks = p_exp.sort_values("Price", ascending=False).head(5)
+                    for _, row in leaks.iterrows():
+                        st.markdown(f"""
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; margin-bottom: 5px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                                <div style="flex-grow: 1;"><p style="margin:0; font-weight: bold; color: white;">{row['Item']}</p><p style="margin:0; font-size: 0.75rem; color: #8B949E;">{row['Category']} • {row['Date'].strftime('%d/%m/%Y')}</p></div>
+                                <div style="text-align: right;"><p style="margin:0; font-weight: bold; color: #ef4444;">R$ {row['Price']:,.2f}</p></div>
+                            </div>
+                        """, unsafe_allow_html=True)
 
-                with col_leaks:
-                    st.markdown("##### 🕵️‍♂️ Top Spending Items")
-                    if not p_exp.empty:
-                        leaks = p_exp.sort_values("Price", ascending=False).head(5)
-                        for _, row in leaks.iterrows():
-                            st.markdown(f"""
-                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; margin-bottom: 5px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                                    <div style="flex-grow: 1;">
-                                        <p style="margin:0; font-weight: bold; color: white;">{row['Item']}</p>
-                                        <p style="margin:0; font-size: 0.75rem; color: #8B949E;">{row['Category']} • {row['Date'].strftime('%d/%m/%Y')}</p>
-                                    </div>
-                                    <div style="text-align: right;">
-                                        <p style="margin:0; font-weight: bold; color: #ef4444;">R$ {row['Price']:,.2f}</p>
-                                    </div>
-                                </div>
-                            """, unsafe_allow_html=True)
+            st.divider()
+            col_runway, col_audit = st.columns([1, 1.5])
+            with col_runway:
+                st.markdown("##### ⛽ Cash Runway")
+                liquid_inc = df_inc_all[df_inc_all['paid'] == 1]['Price'].sum() if ('paid' in df_inc_all.columns and not df_inc_all.empty) else 0.0
+                total_liquid = liquid_inc - (df_exp_all["Price"].sum() if not df_exp_all.empty else 0)
+                days_diff = (end - start).days + 1
+                daily_burn = (pred_exp / days_diff) if pred_exp > 0 else 1
+                runway_days = max(0, total_liquid / daily_burn)
+                color_runway = "#10b981" if runway_days > 90 else "#f59e0b" if runway_days > 30 else "#ef4444"
+                st.markdown(f"""<div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.05);"><h2 style="margin:0; color: {color_runway};">{int(runway_days)} Days</h2><p style="margin:0; font-size: 0.8rem; color: #8B949E;">Survival Days</p></div>""", unsafe_allow_html=True)
 
-                st.divider()
-
-                # --- RUNWAY & WASTE ROW ---
-                col_runway, col_audit = st.columns([1, 1.5])
-                with col_runway:
-                    st.markdown("##### ⛽ Cash Runway")
-                    total_liquid = (df_inc_all[df_inc_all['paid'] == 1]['Price'].sum() - df_exp_all['Price'].sum())
-                    daily_burn = (pred_exp / ((end - start).days + 1)) if pred_exp > 0 else 1
-                    runway_days = max(0, total_liquid / daily_burn)
-                    color_runway = "#10b981" if runway_days > 90 else "#f59e0b" if runway_days > 30 else "#ef4444"
-                    st.markdown(
-                        f"""<div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.05);"><h2 style="margin:0; color: {color_runway};">{int(runway_days)} Days</h2><p style="margin:0; font-size: 0.8rem; color: #8B949E;">Survival Days</p></div>""",
-                        unsafe_allow_html=True)
-
-                with col_audit:
-                    st.markdown("##### ✂️ Optimization Audit")
-                    waste_keywords = ['ifood', 'uber', 'netflix', 'amazon', 'steam', 'delivery', 'burger', 'pizza',
-                                      'hbo', 'disney']
-                    waste_items = p_exp[(p_exp['Category'].isin(['Leisure', 'Entertainment', 'Dining Out'])) | (
-                        p_exp['Item'].str.lower().str.contains('|'.join(waste_keywords)))].copy()
+            with col_audit:
+                st.markdown("##### ✂️ Optimization Audit")
+                waste_keywords = ['ifood', 'uber', 'netflix', 'amazon', 'steam', 'delivery', 'burger', 'pizza', 'hbo', 'disney']
+                if not p_exp.empty:
+                    waste_items = p_exp[(p_exp['Category'].isin(['Leisure', 'Entertainment', 'Dining Out'])) | (p_exp['Item'].fillna('').str.lower().str.contains('|'.join(waste_keywords)))].copy()
                     if not waste_items.empty:
                         for _, row in waste_items.sort_values("Price", ascending=False).head(5).iterrows():
-                            st.markdown(
-                                f"""<div style="display: flex; justify-content: space-between; padding: 5px 10px; background: rgba(255,255,255,0.03); border-radius: 5px; margin-bottom: 3px; border-left: 4px solid #ef4444;"><span style="font-size: 0.85rem; color: #EEE; font-weight: bold;">{row['Item']}</span><span style="font-size: 0.85rem; font-weight: bold; color: #ef4444;">R$ {row['Price']:,.2f}</span></div>""",
-                                unsafe_allow_html=True)
+                            st.markdown(f"""<div style="display: flex; justify-content: space-between; padding: 5px 10px; background: rgba(255,255,255,0.03); border-radius: 5px; margin-bottom: 3px; border-left: 4px solid #ef4444;"><span style="font-size: 0.85rem; color: #EEE; font-weight: bold;">{row['Item']}</span><span style="font-size: 0.85rem; font-weight: bold; color: #ef4444;">R$ {row['Price']:,.2f}</span></div>""", unsafe_allow_html=True)
 
-                st.divider()
-
-                # --- THE FINAL PIECE: SAVINGS PROGRESS ---
-                st.markdown("##### 🎯 Savings Goal Progress")
-                target_rate = 0.30  # Target: 30% savings
-                current_rate = (net_pred / pred_inc) if pred_inc > 0 else 0
-                progress_val = min(1.0, max(0.0, current_rate / target_rate))
-
-                c_prog, c_stat = st.columns([3, 1])
-                with c_prog:
-                    st.progress(progress_val)
-                with c_stat:
-                    st.write(f"**{current_rate * 100:.1f}%** / {target_rate * 100:.0f}%")
+            st.divider()
+            st.markdown("##### 🎯 Savings Goal Progress")
+            target_rate, current_rate = 0.30, (net_pred / pred_inc) if pred_inc > 0 else 0
+            st.progress(min(1.0, max(0.0, current_rate / target_rate)))
+            st.write(f"**{current_rate * 100:.1f}%** / {target_rate * 100:.0f}%")
 
     # --- TIER 5: NOTIFICATIONS ---
     st.divider()
@@ -925,41 +903,23 @@ elif page == "💸 Expenses":
 
     st.divider()
 
-    with st.expander("✏️ Correct Expense History (Ledger Mode)"):
-        st.info("Edit cells below to fix typos or wrong values. Changes save instantly.")
-        df_edit_exp = load_data("expenses")  # Ensure it's not the filtered one
-        edited_exp = st.data_editor(df_edit_exp, key="ledger_exp_page", hide_index=True, use_container_width=True)
-        if not edited_exp.equals(df_edit_exp):
-            for i in range(len(edited_exp)):
-                if not edited_exp.iloc[i].equals(df_edit_exp.iloc[i]):
-                    row = edited_exp.iloc[i]
-                    run_query("""UPDATE expenses
-                                 SET Date=?,
-                                     Category=?,
-                                     Item=?,
-                                     Price=?,
-                                     "Payment Method"=?
-                                 WHERE id = ?""",
-                              (row["Date"], row["Category"], row["Item"], row["Price"], row["Payment Method"],
-                               int(row["id"])))
-                    st.toast("Updated!");
-                    st.rerun()
-
-    st.divider()
     st.markdown("### 📜 History & Maintenance")
 
-    # --- 🟢 NEW FILTER & SEARCH SECTION 🟢 ---
+    # --- 🟢 FILTER & SEARCH SECTION 🟢 ---
     c_search, c_filter = st.columns([2, 1])
     search_query = c_search.text_input("🔍 Search Item", placeholder="Search by name...", key="exp_search_box")
 
     cat_list = df_exp_all["Category"].unique().tolist() if not df_exp_all.empty else []
     selected_cats = c_filter.multiselect("📂 Filter Categories", options=cat_list, key="exp_filter_cats")
 
-    # Refresh/Load data for the table
+    # Load and Filter
     df_exp_display = load_data("expenses")
 
-    # Apply Filtering Logic
     if not df_exp_display.empty:
+        # Pre-process for display
+        df_exp_display["Date"] = pd.to_datetime(df_exp_display["Date"])
+        df_exp_display["paid"] = df_exp_display["paid"].astype(bool)
+
         if search_query:
             df_exp_display = df_exp_display[df_exp_display["Item"].str.contains(search_query, case=False, na=False)]
         if selected_cats:
@@ -973,21 +933,70 @@ elif page == "💸 Expenses":
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "id": None,
                     "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
-                    "Price": st.column_config.NumberColumn("Price", format="R$ %.2f")
+                    "Price": st.column_config.NumberColumn("Price", format="R$ %.2f"),
+                    "paid": st.column_config.CheckboxColumn("Paid?")
                 }
             )
         with cd:
             st.markdown("🗑️ **Delete Record**")
-            # We use df_exp_display here so the dropdown matches what you searched for
-            target = st.selectbox("Select ID",
-                                  (df_exp_display["id"].astype(str) + " - " + df_exp_display["Item"]).tolist(),
-                                  key="del_exp")
+            # Creating a list of IDs and items for the selector
+            target_list = (df_exp_display["id"].astype(str) + " - " + df_exp_display["Item"]).tolist()
+            target = st.selectbox("Select ID", target_list, key="del_exp_final")
+
             if st.button("Delete Permanently"):
                 run_query("DELETE FROM expenses WHERE id = ?", (target.split(" - ")[0],))
+                st.toast("Record Removed")
                 st.rerun()
 
+        with st.expander("✏️ Correct Expense History (Ledger Mode)"):
+            st.info("Edit cells below to fix typos or wrong values. Changes save instantly.")
+            df_edit_exp = load_data("expenses")
 
+            if not df_edit_exp.empty:
+                # --- 🟢 DATA TYPE CONVERSION 🟢 ---
+                # Convert String to Datetime so the Date picker is compatible
+                df_edit_exp["Date"] = pd.to_datetime(df_edit_exp["Date"])
+                # Convert 0/1 to Boolean so the Checkbox works
+                df_edit_exp["paid"] = df_edit_exp["paid"].astype(bool)
+
+                edited_exp = st.data_editor(
+                    df_edit_exp,
+                    key="ledger_exp_page_v2",
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "id": None,  # Hide ID from user view
+                        "paid": st.column_config.CheckboxColumn("Paid?"),
+                        "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
+                        "Price": st.column_config.NumberColumn("Price", format="R$ %.2f")
+                    }
+                )
+
+                if not edited_exp.equals(df_edit_exp):
+                    for i in range(len(edited_exp)):
+                        if not edited_exp.iloc[i].equals(df_edit_exp.iloc[i]):
+                            row = edited_exp.iloc[i]
+
+                            # Convert date back to string for database compatibility
+                            db_date = row["Date"].strftime("%Y-%m-%d") if hasattr(row["Date"], "strftime") else row[
+                                "Date"]
+
+                            run_query("""UPDATE expenses
+                                         SET Date=?,
+                                             Category=?,
+                                             Item=?,
+                                             Price=?,
+                                             "Payment Method"=?,
+                                             paid=?
+                                         WHERE id = ?""",
+                                      (db_date, row["Category"], row["Item"], row["Price"],
+                                       row["Payment Method"], int(row["paid"]), int(row["id"])))
+                            st.toast(f"Updated: {row['Item']}")
+                            st.rerun()
+
+        st.divider()
 
 # ==============================================================================
 # PAGE 3: INCOMES
