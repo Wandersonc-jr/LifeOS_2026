@@ -902,7 +902,6 @@ elif page == "💸 Expenses":
                 st.rerun()
 
     st.divider()
-
     st.markdown("### 📜 History & Maintenance")
 
     # --- 🟢 FILTER & SEARCH SECTION 🟢 ---
@@ -918,8 +917,14 @@ elif page == "💸 Expenses":
     if not df_exp_display.empty:
         # Pre-process for display
         df_exp_display["Date"] = pd.to_datetime(df_exp_display["Date"])
+
+        # 1. Convert to boolean for filtering
         df_exp_display["paid"] = df_exp_display["paid"].astype(bool)
 
+        # 🟢 FILTER: Hide everything already paid to focus on pending items
+        df_exp_display = df_exp_display[df_exp_display["paid"] == False]
+
+        # Apply Search and Category Filters
         if search_query:
             df_exp_display = df_exp_display[df_exp_display["Item"].str.contains(search_query, case=False, na=False)]
         if selected_cats:
@@ -933,7 +938,7 @@ elif page == "💸 Expenses":
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "id": None,
+                    "id": st.column_config.NumberColumn("ID", width="small"),  # 🟢 ID VISIBLE
                     "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                     "Price": st.column_config.NumberColumn("Price", format="R$ %.2f"),
                     "paid": st.column_config.CheckboxColumn("Paid?")
@@ -941,45 +946,48 @@ elif page == "💸 Expenses":
             )
         with cd:
             st.markdown("🗑️ **Delete Record**")
-            # Creating a list of IDs and items for the selector
+            # Selector remains synced with the filtered view
             target_list = (df_exp_display["id"].astype(str) + " - " + df_exp_display["Item"]).tolist()
             target = st.selectbox("Select ID", target_list, key="del_exp_final")
 
             if st.button("Delete Permanently"):
                 run_query("DELETE FROM expenses WHERE id = ?", (target.split(" - ")[0],))
-                st.toast("Record Removed")
+                st.toast(f"Record {target.split(' - ')[0]} Removed")
                 st.rerun()
 
+        st.divider()
         with st.expander("✏️ Correct Expense History (Ledger Mode)"):
             st.info("Edit cells below to fix typos or wrong values. Changes save instantly.")
+            # Ledger loads everything (even paid items) to allow full correction
             df_edit_exp = load_data("expenses")
 
             if not df_edit_exp.empty:
                 # --- 🟢 DATA TYPE CONVERSION 🟢 ---
-                # Convert String to Datetime so the Date picker is compatible
+                # Standardize types to prevent StreamlitAPIException
                 df_edit_exp["Date"] = pd.to_datetime(df_edit_exp["Date"])
-                # Convert 0/1 to Boolean so the Checkbox works
                 df_edit_exp["paid"] = df_edit_exp["paid"].astype(bool)
 
                 edited_exp = st.data_editor(
                     df_edit_exp,
-                    key="ledger_exp_page_v2",
+                    key="ledger_exp_page_v3",
                     hide_index=True,
                     use_container_width=True,
                     column_config={
-                        "id": None,  # Hide ID from user view
+                        "id": st.column_config.NumberColumn("ID", width="small", disabled=True),
+                        # 🟢 ID VISIBLE & PROTECTED
                         "paid": st.column_config.CheckboxColumn("Paid?"),
                         "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
                         "Price": st.column_config.NumberColumn("Price", format="R$ %.2f")
                     }
                 )
 
+                # --- 🟢 UPDATE LOGIC 🟢 ---
                 if not edited_exp.equals(df_edit_exp):
                     for i in range(len(edited_exp)):
                         if not edited_exp.iloc[i].equals(df_edit_exp.iloc[i]):
                             row = edited_exp.iloc[i]
 
-                            # Convert date back to string for database compatibility
+                            # Convert Date object back to String for SQLite
                             db_date = row["Date"].strftime("%Y-%m-%d") if hasattr(row["Date"], "strftime") else row[
                                 "Date"]
 
@@ -993,7 +1001,7 @@ elif page == "💸 Expenses":
                                          WHERE id = ?""",
                                       (db_date, row["Category"], row["Item"], row["Price"],
                                        row["Payment Method"], int(row["paid"]), int(row["id"])))
-                            st.toast(f"Updated: {row['Item']}")
+                            st.toast(f"Updated ID {row['id']}: {row['Item']}")
                             st.rerun()
 
         st.divider()
@@ -1078,16 +1086,27 @@ elif page == "💰 Incomes":
     st.markdown("### ⏳ Awaiting Funds")
     if not active_pending_list.empty:
         st.caption("Items disappear from here once checked, moving to your permanent history below.")
+
+        # 🟢 Ensure types are correct for the editor
+        active_pending_list["Date"] = pd.to_datetime(active_pending_list["Date"])
+        active_pending_list["paid"] = active_pending_list["paid"].astype(bool)
+
         edited_pending = st.data_editor(
             active_pending_list[["id", "Date", "Category", "Item", "Price", "paid"]],
             hide_index=True, use_container_width=True, key="action_list_editor",
-            column_config={"id": None, "Date": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                           "paid": st.column_config.CheckboxColumn("Received?")},
-            disabled=["Date", "Category", "Item", "Price"]
+            column_config={
+                "id": st.column_config.NumberColumn("ID", width="small"),  # 🟢 ID VISIBLE
+                "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
+                "paid": st.column_config.CheckboxColumn("Received?"),
+                "Price": st.column_config.NumberColumn("Price", format="R$ %.2f")
+            },
+            disabled=["id", "Date", "Category", "Item", "Price"]  # 🟢 Only 'paid' is editable
         )
+
         for i in range(len(edited_pending)):
-            if edited_pending.iloc[i]["paid"] == 1:
+            if edited_pending.iloc[i]["paid"] == True:  # Check for boolean True
                 run_query("UPDATE incomes SET paid = 1 WHERE id = ?", (int(edited_pending.iloc[i]["id"]),))
+                st.toast(f"Income Received: {edited_pending.iloc[i]['Item']}")
                 st.rerun()
     else:
         st.success("✨ All current receivables are cleared.")
@@ -1106,6 +1125,10 @@ elif page == "💰 Incomes":
     # Applying the Filter to the Master List
     df_history_display = df_master_inc.copy()
     if not df_history_display.empty:
+        # 🟢 Pre-process types for search and display
+        df_history_display["Date"] = pd.to_datetime(df_history_display["Date"])
+        df_history_display["paid"] = df_history_display["paid"].astype(bool)
+
         if search_inc:
             df_history_display = df_history_display[
                 df_history_display["Item"].str.contains(search_inc, case=False, na=False)]
@@ -1122,21 +1145,36 @@ elif page == "💰 Incomes":
             with col_table:
                 edited_history = st.data_editor(
                     df_history_display,
-                    key="master_history_editor",
+                    key="master_history_editor_v2",
                     hide_index=True, use_container_width=True,
-                    column_config={"id": None, "paid": st.column_config.CheckboxColumn("Rec.?"),
-                                   "Date": st.column_config.DateColumn(format="DD/MM/YYYY")}
+                    column_config={
+                        "id": st.column_config.NumberColumn("ID", width="small", disabled=True),
+                        # 🟢 ID VISIBLE & LOCKED
+                        "paid": st.column_config.CheckboxColumn("Rec.?"),
+                        "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
+                        "Price": st.column_config.NumberColumn("Price", format="R$ %.2f")
+                    }
                 )
+
                 if not edited_history.equals(df_history_display):
                     for i in range(len(edited_history)):
                         if not edited_history.iloc[i].equals(df_history_display.iloc[i]):
                             row = edited_history.iloc[i]
-                            # Using Date standardization for SQL
-                            date_str = row["Date"].strftime("%Y-%m-%d") if not isinstance(row["Date"], str) else row[
-                                "Date"]
-                            run_query("UPDATE incomes SET Date=?, Category=?, Item=?, Price=?, paid=? WHERE id=?",
+
+                            # Date standardization for SQL string format
+                            date_str = row["Date"].strftime("%Y-%m-%d") if hasattr(row["Date"], "strftime") else str(
+                                row["Date"])
+
+                            run_query("""UPDATE incomes
+                                         SET Date=?,
+                                             Category=?,
+                                             Item=?,
+                                             Price=?,
+                                             paid=?
+                                         WHERE id = ?""",
                                       (date_str, row["Category"], row["Item"], row["Price"],
                                        int(row["paid"]), int(row["id"])))
+                            st.toast(f"Updated Income ID {row['id']}")
                             st.rerun()
             with col_tools:
                 st.markdown("🗑️ **Delete Record**")
@@ -1144,6 +1182,7 @@ elif page == "💰 Incomes":
                 target = st.selectbox("Select ID", options, key="del_final_inc")
                 if st.button("Confirm Delete"):
                     run_query("DELETE FROM incomes WHERE id = ?", (target.split(" - ")[0],))
+                    st.toast("Income Record Deleted")
                     st.rerun()
 # ==============================================================================
 # PAGE 5: SET BUDGETS
